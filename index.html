@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Marikina Driving Simulator</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="description" content="A browser-based 3D driving simulator of Marikina City, Philippines, built on real OpenStreetMap road data." />
+  <meta name="theme-color" content="#1b3a5c" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Main menu screen -->
+    <div id="main-menu">
+      <div class="menu-content">
+        <h1 class="game-title">MARIKINA DRIVING SIMULATOR</h1>
+        <h2 class="game-subtitle">Marikina City, Philippines</h2>
+        <div class="menu-buttons">
+          <button id="btn-start" class="menu-btn primary">START MISSIONS</button>
+          <button id="btn-freeroam" class="menu-btn">FREE ROAM</button>
+          <button id="btn-controls" class="menu-btn">CONTROLS</button>
+          <button id="btn-settings" class="menu-btn">SETTINGS</button>
+        </div>
+        <!-- PHASE 3: mission select list (6 misyon, may padlock para sa locked) -->
+        <div id="mission-list" class="mission-list"></div>
+        <p class="menu-footer">Real road data &copy; OpenStreetMap contributors</p>
+      </div>
+    </div>
+
+    <!-- Controls overlay -->
+    <div id="controls-overlay" class="overlay hidden">
+      <div class="overlay-content">
+        <h2>CONTROLS</h2>
+        <div class="controls-grid">
+          <div class="control-item"><kbd>W</kbd> / <kbd>&#8593;</kbd><span>Accelerate</span></div>
+          <div class="control-item"><kbd>S</kbd> / <kbd>&#8595;</kbd><span>Brake / Reverse</span></div>
+          <div class="control-item"><kbd>A</kbd> / <kbd>&#8592;</kbd><span>Steer Left</span></div>
+          <div class="control-item"><kbd>D</kbd> / <kbd>&#8594;</kbd><span>Steer Right</span></div>
+          <div class="control-item"><kbd>Space</kbd><span>Handbrake</span></div>
+          <div class="control-item"><kbd>R</kbd><span>Reset Vehicle</span></div>
+          <div class="control-item"><kbd>V</kbd><span>First / Third Person</span></div>
+          <div class="control-item"><kbd>Q</kbd> / <kbd>E</kbd><span>Look Around (1st person)</span></div>
+             <div class="control-item"><kbd>H</kbd><span>Horn</span></div>
+             <div class="control-item"><kbd>F</kbd><span>Weather Toggle</span></div>
+          <div class="control-item"><kbd>M</kbd><span>Satellite Overlay (dev)</span></div>
+        </div>
+        <button id="btn-close-controls" class="menu-btn">CLOSE</button>
+      </div>
+    </div>
+
+    <!-- Settings overlay -->
+    <div id="settings-overlay" class="overlay hidden">
+      <div class="overlay-content">
+        <h2>SETTINGS</h2>
+        <div class="settings-grid">
+          <div class="setting-item">
+            <label for="setting-time">Time of Day</label>
+            <select id="setting-time">
+              <option value="day">Day</option>
+              <option value="night">Night</option>
+            </select>
+          </div>
+          <div class="setting-item">
+            <label for="setting-traffic">Traffic</label>
+            <select id="setting-traffic">
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <div class="setting-item">
+            <label for="setting-shadows">Shadows</label>
+            <select id="setting-shadows">
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+        </div>
+        <button id="btn-close-settings" class="menu-btn">CLOSE</button>
+      </div>
+    </div>
+
+    <!-- Game HUD -->
+    <div id="hud" class="hidden">
+      <!-- Mission bar: itaas-kaliwa (mission name) + itaas-gitna (distansya) -->
+      <!-- PHASE 3: countdown timer (top-right) + pansamantalang warning -->
+      <div id="mission-timer" class="mission-timer hidden">0:00</div>
+      <div id="mission-warn" class="mission-warn hidden"></div>
+      <!-- PHASE 2B: speed limit warning (pula, naka-flash ng 3s) -->
+      <div id="speed-warning" class="speed-warning hidden"></div>
+      <div class="mission-bar">
+        <div class="mission-name" id="mission-name"></div>
+        <div class="mission-target hidden" id="mission-target">
+          <span class="mission-arrow" id="mission-arrow">&#128969;</span>
+          <span class="mission-label" id="mission-label"></span>
+          <span class="mission-dist" id="mission-dist"></span>
+        </div>
+      </div>
+      <!-- FIX 3: GPS turn-by-turn (top-center) - nagsisilbing kapalit ng raw
+           distance habang may active na mission. Itinatago sa free roam. -->
+      <div id="nav-turn" class="nav-turn hidden">
+        <span class="nav-turn-arrow" id="nav-turn-arrow">&#8593;</span>
+        <span class="nav-turn-text" id="nav-turn-text"></span>
+      </div>
+      <!-- Minimap: baba-kaliwa (FIX 2), 200x200, GTA-style rotating -->
+      <canvas id="minimap" width="200" height="200"></canvas>
+      <!-- Speedometer: baba-kanan -->
+      <canvas id="speedometer" width="170" height="170"></canvas>
+      <!-- Watermark: baba-kaliwa (subtle) -->
+      <div class="hud-watermark">
+        <span class="wm-place">MARIKINA CITY</span>
+        <span class="wm-street" id="street-name">J. P. Rizal Street</span>
+      </div>
+      <div class="hud-bottom">
+        <div class="hud-controls">
+          WASD / Arrow Keys - Drive &nbsp;|&nbsp; Space - Handbrake &nbsp;|&nbsp; R - Reset &nbsp;|&nbsp; V - Camera &nbsp;|&nbsp; M - Satellite Overlay &nbsp;|&nbsp; H - Horn &nbsp;|&nbsp; F - Weather
+        </div>
+      </div>
+    </div>
+
+    <!-- Mobile touch controls -->
+    <div id="touch-controls" class="hidden">
+      <div class="touch-left">
+        <button id="touch-left" class="touch-btn">&#9664;</button>
+        <button id="touch-right" class="touch-btn">&#9654;</button>
+      </div>
+      <div class="touch-right">
+        <button id="touch-gas" class="touch-btn">GAS</button>
+        <button id="touch-brake" class="touch-btn">BRAKE</button>
+      </div>
+    </div>
+
+    <!-- Mission briefing popup (appears 2s after start) -->
+    <div id="mission-briefing" class="mission-popup hidden">
+      <div class="mission-briefing-card">
+        <div class="mission-briefing-title" id="mission-briefing-title">MISSION</div>
+        <div class="mission-briefing-text" id="mission-briefing-text"></div>
+        <div class="mission-briefing-hint">Click or wait to continue</div>
+      </div>
+    </div>
+
+    <!-- Mission complete overlay -->
+    <div id="mission-complete" class="mission-overlay hidden">
+      <div class="mission-complete-box">
+        <div class="mission-complete-title" id="mission-complete-title">MISSION COMPLETE!</div>
+        <div class="mission-complete-sub" id="mission-complete-sub"></div>
+      </div>
+    </div>
+
+    <!-- Loading screen -->
+    <div id="loading">
+      <div class="loading-content">
+        <h2>Loading Marikina City...</h2>
+        <div class="loading-bar">
+          <div class="loading-fill" id="loading-fill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

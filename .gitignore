@@ -1,0 +1,18 @@
+node_modules
+dist
+.vite
+*.log
+.DS_Store
+
+# .env may contain the real GOOGLE_MAPS_API_KEY - huwag i-commit!
+# Ang .env.example ang i-commit.
+.env
+.env.local
+.env.*.local
+
+# 4MB+ Overpass API dump - regenerate with: node tools/fetch-osm.mjs
+# Hindi kailangan para sa build, kaya i-exclude sa repo.
+.cache/
+
+# Vercel CLI local state
+.vercel

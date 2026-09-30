@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="12" fill="#1b3a5c"/>
+  <!-- kalsada -->
+  <path d="M14 64 L26 0 h12 l12 64 Z" fill="#3a3f45"/>
+  <path d="M30.6 64 L31.2 0 h1.6 L33.4 64 Z" fill="#f2d16b"/>
+  <!-- jeepney -->
+  <rect x="21" y="20" width="22" height="13" rx="2" fill="#e2b23c"/>
+  <rect x="23" y="22" width="7" height="6" fill="#8fd3f4"/>
+  <rect x="34" y="22" width="7" height="6" fill="#8fd3f4"/>
+  <rect x="21" y="30" width="22" height="3" fill="#c9932b"/>
+  <circle cx="26" cy="35" r="3.4" fill="#1a1a1a"/>
+  <circle cx="38" cy="35" r="3.4" fill="#1a1a1a"/>
+</svg>

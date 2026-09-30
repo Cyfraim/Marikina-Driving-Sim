@@ -1,0 +1,145 @@
+/* MARIKINA DRIVE - Stylesheet */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a2e; color: #ffffff; user-select: none; }
+#app { width: 100%; height: 100%; position: relative; }
+canvas#game-canvas { display: block; width: 100%; height: 100%; }
+
+/* Main Menu */
+#main-menu { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); z-index: 100; }
+.menu-content { text-align: center; padding: 40px; }
+.game-title { font-size: 4rem; font-weight: 900; letter-spacing: 0.3em; color: #e94560; text-shadow: 0 0 20px rgba(233, 69, 96, 0.5); margin-bottom: 10px; }
+.game-subtitle { font-size: 1.4rem; font-weight: 300; color: #a8d8ea; margin-bottom: 50px; letter-spacing: 0.1em; }
+.menu-buttons { display: flex; flex-direction: column; gap: 15px; align-items: center; margin-bottom: 40px; }
+.menu-btn { padding: 14px 50px; font-size: 1.1rem; font-weight: 600; letter-spacing: 0.1em; border: 2px solid #e94560; background: transparent; color: #ffffff; cursor: pointer; transition: all 0.3s ease; min-width: 250px; }
+.menu-btn:hover { background: #e94560; color: #ffffff; transform: translateY(-2px); box-shadow: 0 5px 20px rgba(233, 69, 96, 0.4); }
+.menu-btn.primary { background: #e94560; color: #ffffff; font-size: 1.3rem; padding: 16px 60px; }
+.menu-btn.primary:hover { background: #ff6b6b; border-color: #ff6b6b; }
+.menu-footer { font-size: 0.9rem; color: #666; letter-spacing: 0.2em; }
+/* Overlays */
+.overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.85); z-index: 200; }
+.overlay.hidden { display: none; }
+.overlay-content { text-align: center; padding: 40px; max-width: 500px; }
+.overlay-content h2 { font-size: 2rem; margin-bottom: 30px; color: #e94560; }
+.controls-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 30px; }
+.control-item { display: flex; align-items: center; gap: 10px; padding: 10px; background: rgba(255, 255, 255, 0.05); border-radius: 5px; }
+.control-item span { font-size: 0.9rem; color: #ccc; }
+kbd { display: inline-block; padding: 4px 10px; font-size: 0.85rem; background: #333; border: 1px solid #555; border-radius: 4px; color: #fff; min-width: 30px; text-align: center; }
+.settings-grid { display: flex; flex-direction: column; gap: 15px; margin-bottom: 30px; }
+.setting-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background: rgba(255, 255, 255, 0.05); border-radius: 5px; }
+.setting-item label { font-size: 1rem; }
+.setting-item select { padding: 8px 15px; background: #333; border: 1px solid #555; color: #fff; border-radius: 4px; font-size: 0.9rem; cursor: pointer; }
+/* HUD */
+#hud { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 50; }
+#hud.hidden { display: none; }
+.hud-top { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 30px; }
+.hud-title { font-size: 1.2rem; font-weight: 700; letter-spacing: 0.2em; color: #e94560; text-shadow: 0 0 10px rgba(233, 69, 96, 0.5); }
+.hud-speed { font-size: 2rem; font-weight: 300; color: #ffffff; background: rgba(0, 0, 0, 0.5); padding: 10px 20px; border-radius: 8px; }
+#speed-value { font-weight: 700; color: #a8d8ea; }
+.hud-bottom { position: absolute; bottom: 0; left: 0; width: 100%; padding: 15px 30px; }
+.hud-controls { font-size: 0.85rem; color: rgba(255, 255, 255, 0.6); text-align: center; letter-spacing: 0.05em; }
+
+/* FIX 2: minimap - BABA-KALIWA, 200x200, GTA-style rotating circle.
+   ANG CIRCLE, BORDER, COMPASS, "300m" AY IGINUGUHIT NG CANvas (Minimap.js),
+   kaya walang border/border-radius sa CSS - kung mayroon, mag-doble ang
+   labas na hugis at masisira ang sukat ng VP. */
+#minimap { position: absolute; bottom: 18px; left: 18px; width: 200px; height: 200px; }
+/* Speedometer - baba-kanan (spec) */
+#speedometer { position: absolute; bottom: 18px; right: 20px; pointer-events: none; filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6)); }
+/* Watermark - baba-kaliwa, subtle (spec) */
+.hud-watermark { position: absolute; bottom: 20px; left: 232px; display: flex; flex-direction: column; gap: 2px; pointer-events: none; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9); }
+.hud-watermark .wm-place { font-size: 0.9rem; color: rgba(255, 255, 255, 0.62); letter-spacing: 0.12em; text-transform: uppercase; }
+.hud-watermark .wm-street { font-size: 0.75rem; color: rgba(255, 255, 255, 0.42); letter-spacing: 0.06em; font-style: italic; }
+/* Touch Controls */
+#touch-controls { position: absolute; bottom: 20px; left: 0; width: 100%; display: flex; justify-content: space-between; padding: 0 20px; z-index: 60; pointer-events: none; }
+#touch-controls.hidden { display: none; }
+.touch-left, .touch-right { display: flex; gap: 10px; pointer-events: auto; }
+.touch-btn { width: 60px; height: 60px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.3); background: rgba(0, 0, 0, 0.5); color: #fff; font-size: 1rem; font-weight: 700; cursor: pointer; transition: all 0.2s; }
+.touch-btn:active { background: rgba(233, 69, 96, 0.7); border-color: #e94560; }
+/* Loading Screen */
+#loading { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1a1a2e; z-index: 300; }
+#loading.hidden { display: none; }
+.loading-content { text-align: center; }
+.loading-content h2 { font-size: 1.5rem; margin-bottom: 20px; color: #a8d8ea; }
+.loading-bar { width: 300px; height: 6px; background: #333; border-radius: 3px; overflow: hidden; }
+.loading-fill { width: 0%; height: 100%; background: #e94560; transition: width 0.3s ease; }
+/* Responsive */
+@media (max-width: 768px) { .game-title { font-size: 2.5rem; } .game-subtitle { font-size: 1rem; } .menu-btn { min-width: 200px; padding: 12px 40px; font-size: 1rem; } .controls-grid { grid-template-columns: 1fr; } #minimap { width: 130px; height: 130px; } #speedometer { width: 110px; height: 110px; } .hud-watermark { bottom: 12px; left: 156px; } .hud-watermark .wm-place { font-size: 0.72rem; } .hud-watermark .wm-street { font-size: 0.62rem; } }
+
+
+/* ===== Mission system (FIX 3) ===== */
+.mission-bar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  pointer-events: none; z-index: 70; }
+.mission-name { font-size: 0.8rem; color: rgba(255,255,255,0.85); letter-spacing: 0.1em;
+  text-transform: uppercase; text-shadow: 0 1px 4px rgba(0,0,0,0.9); }
+.mission-target { display: flex; align-items: center; gap: 8px;
+  background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 20px; padding: 5px 14px; backdrop-filter: blur(4px); }
+.mission-target.hidden { display: none; }
+.mission-arrow { display: inline-block; font-size: 1rem; line-height: 1;
+  transition: transform 0.08s linear; }
+.mission-label { color: #ffe27a; font-size: 0.85rem; font-weight: 600; }
+.mission-dist { color: #fff; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.mission-popup { position: absolute; top: 22%; left: 50%; transform: translateX(-50%);
+  z-index: 200; pointer-events: auto; cursor: pointer; }
+.mission-popup.hidden { display: none; }
+.mission-briefing-card { background: rgba(10,12,28,0.92); border: 1px solid rgba(255,255,255,0.18);
+  border-left: 4px solid #ffd24a; border-radius: 10px; padding: 18px 26px;
+  max-width: 420px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+.mission-briefing-title { color: #ffd24a; font-size: 0.95rem; font-weight: 700;
+  letter-spacing: 0.08em; margin-bottom: 8px; }
+.mission-briefing-text { color: #e8e8ef; font-size: 0.95rem; line-height: 1.5; }
+.mission-briefing-hint { color: rgba(255,255,255,0.45); font-size: 0.72rem; margin-top: 12px; }
+.mission-overlay { position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; background: rgba(0,0,0,0.55); z-index: 250; }
+.mission-overlay.hidden { display: none; }
+.mission-complete-box { text-align: center; }
+.mission-complete-title { color: #4ade80; font-size: 2rem; font-weight: 800;
+  letter-spacing: 0.06em; text-shadow: 0 2px 18px rgba(74,222,128,0.5); }
+.mission-complete-sub { color: #e8e8ef; font-size: 1.1rem; margin-top: 10px; }
+
+
+/* ===== FIX 3: GPS turn-by-turn nav (top-center) ===== */
+.nav-turn { position: absolute; top: 54px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 12px;
+  background: rgba(10,12,28,0.88); border: 1px solid rgba(255,210,63,0.45);
+  border-radius: 10px; padding: 10px 20px; pointer-events: none;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.5); max-width: 70vw; }
+.nav-turn.hidden { display: none; }
+.nav-turn-arrow { font-size: 1.9rem; line-height: 1; color: #ffd23f;
+  text-shadow: 0 0 10px rgba(255,210,63,0.5); min-width: 1.2em; text-align: center; }
+.nav-turn-text { color: #fff; font-size: 0.95rem; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+/* ===== PHASE 2B: speed limit warning ===== */
+.speed-warning { position: absolute; top: 96px; left: 50%; transform: translateX(-50%);
+  background: rgba(180, 20, 20, 0.88); color: #fff; font-weight: 700; font-size: 1rem;
+  padding: 8px 18px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.35);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5); pointer-events: none; z-index: 60;
+  letter-spacing: 0.04em; }
+.speed-warning.hidden { display: none; }
+/* ===== PHASE 3: countdown timer, warnings, mission select ===== */
+.mission-timer { position: absolute; top: 20px; right: 20px; z-index: 60;
+  background: rgba(10,12,28,0.88); border: 1px solid rgba(255,255,255,0.22);
+  color: #fff; font-size: 1.5rem; font-weight: 700; padding: 8px 16px;
+  border-radius: 10px; font-variant-numeric: tabular-nums; pointer-events: none; }
+.mission-timer.hidden { display: none; }
+.mission-timer.urgent { color: #ff5252; border-color: rgba(255,80,80,0.7);
+  animation: pulse-urgent 1s infinite; }
+@keyframes pulse-urgent { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+.mission-warn { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  z-index: 61; color: #ff5252; font-size: 2rem; font-weight: 800; letter-spacing: 0.06em;
+  text-shadow: 0 0 16px rgba(0,0,0,0.9), 0 2px 6px #000; pointer-events: none;
+  text-align: center; }
+.mission-warn.hidden { display: none; }
+
+.mission-list { display: flex; flex-direction: column; gap: 4px; margin: 18px auto 0;
+  max-width: 380px; width: 90%; }
+.mission-row { display: flex; align-items: center; gap: 10px; padding: 6px 12px;
+  background: rgba(255,255,255,0.05); border-radius: 6px; font-size: 0.85rem;
+  color: rgba(255,255,255,0.85); }
+.mission-row.locked { opacity: 0.45; color: rgba(255,255,255,0.55); }
+.mission-row .mi { width: 1.6em; text-align: center; font-weight: 700; color: #ffd24a; }
+.mission-row.locked .mi { color: rgba(255,255,255,0.5); }
+.mission-row .mn { flex: 1; text-align: left; }
+.mission-row .mdone { color: #4ade80; font-weight: 700; }

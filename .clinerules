@@ -1,0 +1,116 @@
+# 🎮 Cline Task: Nangka, Marikina Driving Simulator — Google Maps-Based
+
+## Project Goal
+Vibe-code a browser-based **3D driving simulator** set in **Nangka, Marikina City, Philippines**, with the road layout, landmarks, and environment visually inspired by **Google Street View of Nangka**. The map must use the **Google Maps JavaScript API** (Roads/Street View data as visual reference) to build the world.
+
+---
+
+## Tech Stack
+- **Frontend:** Three.js (3D rendering) + Vanilla JS or React
+- **Map Data:** Google Maps JavaScript API (use Static Maps or Maps Embed for road layout reference; replicate visually in Three.js)
+- **Physics (optional):** Cannon.js or Rapier for basic vehicle physics
+- **Build Tool:** Vite
+- **Language:** JavaScript (TypeScript optional but preferred)
+
+---
+
+## Key Features to Build
+
+### 1. Map / World
+- Recreate the **road network of Nangka, Marikina** in 3D using Three.js geometry
+- Base the road layout on Google Maps satellite/street view of Nangka (approx. coords: **14.6508° N, 121.1080° E**)
+- Include:
+  - Main road (Nangka Road / A. Bonifacio Ave area)
+  - Side streets and intersections
+  - Sidewalks with curbs
+  - Basic building facades (low-poly box buildings) on either side of roads
+  - Overhead wires / electric posts (iconic in PH streets)
+  - Vegetation: palm trees, mango trees (simple low-poly)
+  - Drainage canals alongside roads (common in Nangka)
+
+### 2. Street View-Style Environment
+- Match the **visual feel of Nangka from Google Street View**:
+  - Dense residential/commercial mix along the road
+  - Sari-sari stores, tricycle terminals, small shops on the sides
+  - Jeepneys and tricycles parked or moving (static or simple animated NPCs)
+  - Filipino-style signages (low-poly approximations)
+  - Overhead shade structures / market stalls near junctions
+- Sky: daytime Philippine sky (light blue, hazy/sunny — typical Metro Manila weather)
+- Lighting: warm directional sun from a slight angle, ambient shadows on buildings
+
+### 3. Player Vehicle
+- First-person or third-person controllable vehicle (default: third-person, toggle with `V`)
+- Basic car model (low-poly box car is fine)
+- Controls:
+  - `W / A / S / D` or arrow keys to drive
+  - `Space` for brake
+  - `V` to toggle camera view
+- Collision detection with road boundaries and buildings
+
+### 4. UI / HUD
+- Speedometer (bottom right)
+- Mini-map (top right) — overhead 2D view of road layout showing player position
+- Location label: "Nangka, Marikina City" watermark (bottom left, subtle)
+- Start screen with title: **"Nangka Drive"** and a `Start` button
+
+### 5. Google Maps Integration
+- Use **Google Maps Static API** to fetch a top-down satellite image of Nangka and display it as:
+  - The mini-map background texture (overlay player dot on top)
+  - A reference plane during dev mode (toggle with `M`)
+- Require a `GOOGLE_MAPS_API_KEY` in `.env` — never hardcode it
+
+---
+
+## File Structure to Generate
+
+nangka-drive/
+├── public/
+│ └── index.html
+├── src/
+│ ├── main.js # Entry point
+│ ├── world/
+│ │ ├── roads.js # Road geometry builder
+│ │ ├── buildings.js # Building placement
+│ │ ├── vegetation.js # Trees and posts
+│ │ └── environment.js # Sky, lighting, ground
+│ ├── vehicle/
+│ │ ├── car.js # Player car model + physics
+│ │ └── controls.js # Input handler
+│ ├── npcs/
+│ │ └── tricycle.js # Simple NPC vehicles
+│ ├── ui/
+│ │ ├── hud.js # Speedometer, minimap
+│ │ └── minimap.js # Google Maps static tile overlay
+│ └── utils/
+│ └── mapLoader.js # Google Maps API helper
+├── .env.example # GOOGLE_MAPS_API_KEY=your_key_here
+├── vite.config.js
+└── package.json
+
+
+---
+
+## Cline Behavior Instructions
+
+- **Vibe code this** — generate working, playable code step by step
+- Start with the **Vite project scaffold**, then build world geometry first, then vehicle, then UI
+- For the road layout: **hardcode the Nangka road network as coordinates** (translate real GPS coords to local Three.js scene units at a 1:1000 scale)
+- Use Google Street View screenshots (describe these to Cline or attach them) as visual reference for placing buildings and landmarks
+- Keep geometry **low-poly** for performance — this should run in a browser at 60fps
+- Add **comments in Tagalog/English** where relevant (e.g., `// Tricycle terminal sa kanto`)
+- If the user provides a Google Maps API key, integrate it; otherwise mock the minimap with a flat colored plane
+
+---
+
+## Reference Coordinates (Nangka, Marikina)
+- Center: `14.6508, 121.1080`
+- Key landmarks to approximate:
+  - Nangka Public Market area
+  - A. Bonifacio Ave running through
+  - Marikina River nearby (east side)
+  - Residential barangay streets branching off
+
+---
+
+## First Step for Cline
+> "Scaffold the Vite + Three.js project, install dependencies (three, cannon-es, vite), and create the basic scene with a flat road plane textured gray, a directional sun light, and a blue sky background. Place a simple box as the player car at the center of the scene with WASD movement. Output all files."
