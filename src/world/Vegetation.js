@@ -93,7 +93,9 @@ export class Vegetation {
     const mat = new THREE.MeshStandardMaterial({
       vertexColors: true, roughness: 0.9, metalness: 0.0,
     });
-    target.add(mesh.build(mat));
+    const trees = mesh.build(mat);
+    trees.castShadow = false;
+    target.add(trees);
     if (!bounds) {
       console.log(`[Vegetation] ${palms} palm + ${mangoes} mangga, ${mesh.triangles} tris`);
     }

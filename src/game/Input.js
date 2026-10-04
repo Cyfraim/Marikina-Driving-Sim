@@ -20,13 +20,37 @@ export class Input {
     this.onWeatherToggle = null;
     this.horn = false;
     this.weatherToggle = false;
+    this.listeners = [];
+    this.isSetup = false;
+    this.keyDownListener = (e) => this.onKeyDown(e);
+    this.keyUpListener = (e) => this.onKeyUp(e);
+    this.blurListener = () => this.resetStates();
+    this.visibilityListener = () => {
+      if (document.hidden) this.resetStates();
+    };
   }
 
   setup() {
-    window.addEventListener('keydown', (e) => this.onKeyDown(e));
-    window.addEventListener('keyup', (e) => this.onKeyUp(e));
+    if (this.isSetup) return;
+    this.isSetup = true;
+    this.listen(window, 'keydown', this.keyDownListener);
+    this.listen(window, 'keyup', this.keyUpListener);
+    this.listen(window, 'blur', this.blurListener);
+    this.listen(document, 'visibilitychange', this.visibilityListener);
     // Touch controls
     this.setupTouch();
+  }
+
+  listen(target, type, listener, options) {
+    target.addEventListener(type, listener, options);
+    this.listeners.push({ target, type, listener, options });
+  }
+
+  resetStates() {
+    for (const prop of ['forward', 'backward', 'left', 'right', 'handbrake',
+      'reset', 'cameraToggle', 'satelliteToggle', 'lookLeft', 'lookRight',
+      'horn', 'weatherToggle']) this[prop] = false;
+    for (const code of Object.keys(this.keys)) this.keys[code] = false;
   }
 
   onKeyDown(e) {
@@ -94,11 +118,16 @@ export class Input {
     const bindTouch = (id, prop) => {
       const el = document.getElementById(id);
       if (!el) return;
-      el.addEventListener('touchstart', (e) => { e.preventDefault(); this[prop] = true; });
-      el.addEventListener('touchend', (e) => { e.preventDefault(); this[prop] = false; });
-      el.addEventListener('mousedown', () => { this[prop] = true; });
-      el.addEventListener('mouseup', () => { this[prop] = false; });
-      el.addEventListener('mouseleave', () => { this[prop] = false; });
+      const touchStart = (e) => { e.preventDefault(); this[prop] = true; };
+      const touchEnd = (e) => { e.preventDefault(); this[prop] = false; };
+      const mouseDown = () => { this[prop] = true; };
+      const mouseUp = () => { this[prop] = false; };
+      this.listen(el, 'touchstart', touchStart, { passive: false });
+      this.listen(el, 'touchend', touchEnd, { passive: false });
+      this.listen(el, 'touchcancel', touchEnd, { passive: false });
+      this.listen(el, 'mousedown', mouseDown);
+      this.listen(el, 'mouseup', mouseUp);
+      this.listen(el, 'mouseleave', mouseUp);
     };
     bindTouch('touch-left', 'left');
     bindTouch('touch-right', 'right');
@@ -107,7 +136,11 @@ export class Input {
   }
 
   destroy() {
-    window.removeEventListener('keydown', this.onKeyDown);
-    window.removeEventListener('keyup', this.onKeyUp);
+    for (const { target, type, listener, options } of this.listeners) {
+      target.removeEventListener(type, listener, options);
+    }
+    this.listeners.length = 0;
+    this.isSetup = false;
+    this.resetStates();
   }
 }

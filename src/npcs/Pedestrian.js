@@ -53,12 +53,12 @@ class Pedestrian {
     // 1) torso
     const torso = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.52, 0.20), clothMat);
     torso.position.y = 1.10;      // 0.84 -> 1.36 m
-    torso.castShadow = true;
+    torso.castShadow = false;
     this.group.add(torso);
     // 2) head
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.22, 0.20), skinMat);
     head.position.y = 1.48;
-    head.castShadow = true;
+    head.castShadow = false;
     this.group.add(head);
     // 3) 4 limbs (2 braso, 2 binti) - naka-swing
     const limbMat = new THREE.MeshStandardMaterial({ color: cloth, roughness: 0.85 });

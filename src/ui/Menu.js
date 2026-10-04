@@ -28,12 +28,15 @@ export class Menu {
       this.settingsOverlay.classList.add('hidden');
     });
     // Settings handlers
+    document.getElementById('setting-sfx-volume')?.addEventListener('input', (e) => {
+      this.game.audio?.setVolume(Number(e.target.value) / 100);
+    });
     document.getElementById('setting-time').addEventListener('change', (e) => {
       this.game.settings.timeOfDay = e.target.value;
       this.game.setTimeOfDay(e.target.value);
     });
     document.getElementById('setting-traffic').addEventListener('change', (e) => {
-      this.game.settings.traffic = e.target.value;
+      this.game.setTraffic(e.target.value);
     });
     document.getElementById('setting-shadows').addEventListener('change', (e) => {
       this.game.settings.shadows = e.target.value;

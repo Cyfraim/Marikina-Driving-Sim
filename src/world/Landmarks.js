@@ -1,200 +1,95 @@
-// ---------------------------------------------------------------------------
-// Landmarks.js - Marikina River at ang mga tanda ng Nangka
-//
-// - Marikina River: tubig N-S sa silangang bahagi ng mapa (~14.651, 121.112)
-//   na may concrete embankment walls
-// - Nangka Public Market: malaking tinala sa tabi ng main road
-// - Tricycle terminal: sa pinakamalaking intersection ng Bayan-Bayanan Ave
-//
-// Lahat ng GPS ay galing sa src/utils/geo.js (gpsToLocal).
-// ---------------------------------------------------------------------------
+// Checked geographic anchors; deliberately low-poly approximate models.
 import * as THREE from 'three';
 import { ColoredMeshBuilder } from '../utils/coloredMesh.js';
-import { RIVER_X, RIVER_HALF_WIDTH, terrainHeight } from '../utils/geo.js';
-import { ROAD_LINES, getMajorJunctions, sampleRoad } from '../utils/roadLayout.js';
-
-// GPS coordinates (mula sa .clinerules at OSM)
-export const RIVER_GPS = { lat: 14.6510, lon: 121.1120 };
-
-const WATER_DEEP = 0x1b4a63;   // malalim na tubig
-const WATER_SHALLOW = 0x2e6f8e; // maaaring di malalim
-const BANK_WALL = 0x8d8d85;    // concrete embankment
-const WATER_Y = 0.05;           // antas ng tubig
+import { gpsToLocal, terrainHeight } from '../utils/geo.js';
+import { LANDMARKS } from './landmarkData.js';
+import { ROAD_LINES, distToPolyline, nearestDistanceOnRoad, sampleRoad } from '../utils/roadLayout.js';
 
 export class Landmarks {
   constructor(scene) {
-    this.scene = scene;
-    this.group = new THREE.Group();
-    this.collisionBoxes = [];
+    this.group = new THREE.Group(); this.group.name = 'Marikina landmarks';
+    this.collisionBoxes = []; this.obbColliders = []; this.positions = [];
     scene.add(this.group);
   }
-
   build() {
-    this.buildRiver();
-    this.buildMarket();
-    this.buildTerminal();
+    for (const data of LANDMARKS) this.buildLandmark(data);
   }
-
-  // --- Marikina River: water plane + concrete embankments ----------------
-  buildRiver() {
+  buildLandmark(data) {
+    const { x, z } = gpsToLocal(...data.gps), gy = terrainHeight(x, z);
+    let nearest = null, distance = Infinity;
+    for (const road of ROAD_LINES) {
+      if (road.cls === 'service' || road.cls === 'track') continue;
+      const d = distToPolyline(x, z, road.pts);
+      if (d < distance) { distance = d; nearest = road; }
+    }
+    const roadPoint = nearest ? sampleRoad(nearest.i, nearestDistanceOnRoad(nearest.i, x, z).along, 0) : { x, z: z + 1 };
+    const yaw = Math.atan2(roadPoint.x - x, roadPoint.z - z);
+    const group = new THREE.Group(); group.name = data.label;
+    group.userData.landmarkId = data.id; group.userData.gps = data.gps;
     const mesh = new ColoredMeshBuilder();
-    const zMin = -1400;
-    const zMax = 1400;
-    const step = 60; // segments sa habang Z
-
-    for (let z = zMin; z < zMax; z += step) {
-      const z0 = z;
-      const z1 = Math.min(z + step, zMax);
-      // slight meander para hindi sobrang tuwid ang ilog
-      const cx0 = RIVER_X + Math.sin(z * 0.0022) * 18;
-      const cx1 = RIVER_X + Math.sin(z1 * 0.0022) * 18;
-      const inner0 = cx0 - RIVER_HALF_WIDTH;
-      const inner1 = cx1 - RIVER_HALF_WIDTH;
-      const outer0 = cx0 + RIVER_HALF_WIDTH;
-      const outer1 = cx1 + RIVER_HALF_WIDTH;
-
-      // water surface - darker sa gitna
-      mesh.quad(
-        [inner0, WATER_Y, z0], [outer0, WATER_Y, z0],
-        [outer1, WATER_Y, z1], [inner1, WATER_Y, z1],
-        WATER_DEEP, [0, 1, 0]
-      );
-      // shallows sa dalawang gilid
-      mesh.quad(
-        [inner0, WATER_Y, z0],
-        [inner0 + (outer0 - inner0) * 0.35, WATER_Y, z0],
-        [inner1 + (outer1 - inner1) * 0.35, WATER_Y, z1],
-        [inner1, WATER_Y, z1],
-        WATER_SHALLOW, [0, 1, 0]
-      );
-
-      // concrete embankment walls (inner at outer bank)
-      mesh.quad(
-        [inner0, -0.4, z0], [inner0, 0.55, z0],
-        [inner1, 0.55, z1], [inner1, -0.4, z1],
-        BANK_WALL, [1, 0, 0]
-      );
-      mesh.quad(
-        [outer0, -0.4, z0], [outer0, 0.55, z0],
-        [outer1, 0.55, z1], [outer1, -0.4, z1],
-        BANK_WALL, [-1, 0, 0]
-      );
-      // bank caps (top)
-      mesh.quad(
-        [inner0, 0.55, z0], [inner0 - 0.5, 0.55, z0],
-        [inner1 - 0.5, 0.55, z1], [inner1, 0.55, z1],
-        BANK_WALL, [0, 1, 0]
-      );
-      mesh.quad(
-        [outer0 + 0.5, 0.55, z0], [outer0, 0.55, z0],
-        [outer1, 0.55, z1], [outer1 + 0.5, 0.55, z1],
-        BANK_WALL, [0, 1, 0]
-      );
+    // Point anchors are not surveyed footprints: fit the stylized model inside
+    // the available road clearance instead of blocking surrounding streets.
+    let available = Infinity;
+    for (const road of ROAD_LINES) available = Math.min(available, distToPolyline(x, z, road.pts) - road.half - 1.5);
+    const footprintScale = Math.min(1, Math.max(0.1, available / (Math.hypot(data.width, data.depth) / 2 + 0.6)));
+    const w = data.width * footprintScale, d = data.depth * footprintScale, h = data.height;
+    const point = (lx, lz) => ({ x: x + lx * Math.cos(yaw) + lz * Math.sin(yaw), z: z - lx * Math.sin(yaw) + lz * Math.cos(yaw) });
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(w + data.grounds * 2, d + data.grounds * 2),
+      new THREE.MeshStandardMaterial({ color: 0xbab8af, roughness: 0.95 }));
+    ground.rotation.set(-Math.PI / 2, 0, -yaw); ground.position.set(x, gy + 0.025, z);
+    ground.receiveShadow = true; group.add(ground);
+    mesh.box(x, gy + h / 2, z, w, h, d, data.wall, yaw);
+    mesh.box(x, gy + h + 0.25, z, w + 0.6, 0.5, d + 0.6, data.roof, yaw);
+    if (data.id === 'parish') {
+      mesh.gable(x, gy + h + 0.5, z, w + 1, d + 1, 3, data.roof, yaw);
+      const tower = point(-w / 2 + 2.6, -d / 2 + 2.6);
+      mesh.box(tower.x, gy + 7.5, tower.z, 5, 15, 5, 0xf3f0e8, yaw);
+      mesh.gable(tower.x, gy + 15, tower.z, 5.4, 5.4, 1.4, data.roof, yaw);
+      const cross = point(0, d / 2 + 0.12);
+      mesh.box(cross.x, gy + h + 1, cross.z, 0.3, 2, 0.2, 0x777777, yaw);
+      mesh.box(cross.x, gy + h + 1.3, cross.z, 1.3, 0.3, 0.2, 0x777777, yaw);
+      // Arched doorway: rectangular lower opening + low-poly semicircle.
+      const front = point(0, d / 2 + 0.08);
+      mesh.box(front.x, gy + 1.5, front.z, 3, 3, 0.12, 0x423b35, yaw);
+      for (let i = 0; i < 8; i++) {
+        const a = Math.PI * i / 8, b = Math.PI * (i + 1) / 8;
+        const p = point(1.5 * Math.cos(a), d / 2 + 0.15), q = point(1.5 * Math.cos(b), d / 2 + 0.15);
+        mesh.tri([front.x, gy + 3, front.z], [p.x, gy + 3 + 1.5 * Math.sin(a), p.z],
+          [q.x, gy + 3 + 1.5 * Math.sin(b), q.z], 0x423b35, [Math.sin(yaw), 0, Math.cos(yaw)]);
+      }
+      this.addCollider(tower.x, gy, tower.z, 5, 5, 16.4, yaw);
+    } else {
+      for (let i = -2; i <= 2; i++) {
+        const p = point(i * w / 6, d / 2 + 0.08);
+        mesh.box(p.x, gy + 1.7, p.z, w / 9, 3.4, 0.12, 0x35414a, yaw);
+      }
     }
-    const mat = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.6, metalness: 0.0,
-    });
-    this.group.add(mesh.build(mat));
-
-    // FIX invisible-wall: HINDA na natatakot ang tubig. Ang dating mahabang
-    // box (2.8 km) ay naka-block sa mga kalsadang papunta sa tulay ng
-    // Marikina River (e.g. T. Bugallon Extension, Paraiso Street) - kaya
-    // hindi makatapos ang drive at parang invisible wall.
-    //
-    // Ang tubig ay visually OBVIOUS (malaking blue plane), kaya walang
-    // kailangang invisible box. Ang naka-drive sa tubig ay sapat nang
-    // maging self-evident. Tinatago na lamang ang box sa hindi kailangan.
-    console.log(`[Landmarks] Marikina River (x=${RIVER_X}, ${RIVER_HALF_WIDTH * 2} m wide) - no collision`);
+    const geometry = mesh.build(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 }));
+    geometry.castShadow = true; group.add(geometry);
+    this.addSign(group, data.label, point(0, d / 2 + 0.2), gy + h - 1.1, w * 0.9, yaw, data.id === 'market' ? '#27683b' : '#264e6a');
+    this.group.add(group);
+    this.addCollider(x, gy, z, w, d, h, yaw);
+    this.positions.push({ id: data.id, x, z, y: gy, yaw, width: w, depth: d, footprintScale });
   }
-
-  // --- Nangka Public Market: malaking tindahang may flat roof ------------
-  buildMarket() {
-    const mesh = new ColoredMeshBuilder();
-    // Hanapin ang main road at ilagay ang market sa tabi nito (hindi kalsada)
-    const main = ROAD_LINES.find((r) => r.name === 'Bayan-Bayanan Avenue')
-      || ROAD_LINES.find((r) => r.cls === 'secondary');
-    if (!main) return;
-    const s = sampleRoad(main.i, main.len * 0.5, main.half + 1.6 + 14);
-    const x = s.x;
-    const z = s.z;
-    const gy = terrainHeight(x, z); // nasa slope ng lupa
-    const W = 26; // haba
-    const D = 18; // lapad
-    const H = 7;   // 2-3 storey
-    const yaw = s.yaw;
-
-    mesh.box(x, gy + H / 2, z, W, H, D, 0xd7cfc0, yaw);
-    // flat roof + parapet
-    mesh.box(x, gy + H + 0.2, z, W + 0.6, 0.4, D + 0.6, 0x8a8a8a, yaw);
-    // malaking signage band sa harap
-    const frontX = x + Math.sin(yaw) * (D / 2 + 0.06);
-    const frontZ = z + Math.cos(yaw) * (D / 2 + 0.06);
-    mesh.box(frontX, gy + H - 0.9, frontZ, W * 0.7, 1.4, 0.12, 0x27ae60, yaw);
-    // stall openings
-    const px = Math.cos(yaw);
-    const pz = -Math.sin(yaw);
-    for (let i = -2; i <= 2; i++) {
-      mesh.box(frontX + px * i * 4, gy + 1.6, frontZ + pz * i * 4, 2.2, 3.2, 0.1, 0x34495e, yaw);
-    }
-
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 });
-    this.group.add(mesh.build(mat));
-    this.collisionBoxes.push(
-      new THREE.Box3(
-        new THREE.Vector3(x - W / 2, gy, z - D / 2),
-        new THREE.Vector3(x + W / 2, gy + H, z + D / 2)
-      )
-    );
-    console.log(`[Landmarks] Nangka Public Market at (${x.toFixed(0)}, ${z.toFixed(0)})`);
+  addCollider(x, y, z, w, d, h, yaw) {
+    this.obbColliders.push({ x, z, y: y + h / 2, hx: w / 2, hz: d / 2, hy: h / 2,
+      cos: Math.cos(yaw), sin: Math.sin(yaw) });
   }
-
-  // --- Tricycle terminal sa pinakamalaking intersection -------------------
-  buildTerminal() {
-    const junctions = getMajorJunctions();
-    if (!junctions.length) return;
-    const main = ROAD_LINES.find((r) => r.name === 'Bayan-Bayanan Avenue');
-    let target = junctions[0];
-    if (main) {
-      const onMain = junctions.filter((j) => j.a === main.i || j.b === main.i);
-      if (onMain.length) target = onMain[0];
+  addSign(group, label, p, y, width, yaw, color) {
+    let texture = null;
+    if (typeof document !== 'undefined') {
+      const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 96;
+      const ctx = canvas.getContext?.('2d');
+      if (ctx) {
+        ctx.fillStyle = color; ctx.fillRect?.(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#ffffff'; ctx.font = 'bold 44px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(label, canvas.width / 2, canvas.height / 2, 980);
+        texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
+      }
     }
-    const mesh = new ColoredMeshBuilder();
-    const W = 12;
-    const D = 6;
-    const H = 3.2;
-    const road = ROAD_LINES[target.a];
-    const along = nearestAlong(target.a, target.x, target.z);
-    const s = sampleRoad(target.a, along + 12, road.half + 1.6 + 4);
-    const yaw = s.yaw;
-    const gy = terrainHeight(s.x, s.z);
-    const px = Math.cos(yaw);
-    const pz = -Math.sin(yaw);
-    for (const [ox, oz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-      mesh.box(s.x + px * ox * W / 2, gy + H / 2, s.z + pz * oz * D / 2, 0.2, H, 0.2, 0x777777, yaw);
-    }
-    mesh.box(s.x, gy + H + 0.15, s.z, W + 0.5, 0.3, D + 0.5, 0x556677, yaw);
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 });
-    this.group.add(mesh.build(mat));
-    console.log(`[Landmarks] Tricycle terminal at (${s.x.toFixed(0)}, ${s.z.toFixed(0)})`);
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(width, 1.4), new THREE.MeshBasicMaterial({
+      map: texture, color: texture ? 0xffffff : color, side: THREE.DoubleSide }));
+    sign.name = label; sign.position.set(p.x, y, p.z); sign.rotation.y = yaw; group.add(sign);
   }
-
   getCollisionBoxes() { return this.collisionBoxes; }
-}
-
-// helper: distance-along ng road para sa isang point
-function nearestAlong(ri, x, z) {
-  const r = ROAD_LINES[ri];
-  let best = 0;
-  let bestD = Infinity;
-  for (let i = 0; i < r.pts.length - 1; i++) {
-    const a = r.pts[i];
-    const dx = r.pts[i + 1].x - a.x;
-    const dz = r.pts[i + 1].z - a.z;
-    const l2 = dx * dx + dz * dz;
-    let t = l2 ? ((x - a.x) * dx + (z - a.z) * dz) / l2 : 0;
-    t = Math.max(0, Math.min(1, t));
-    const d = Math.hypot(x - (a.x + dx * t), z - (a.z + dz * t));
-    if (d < bestD) { bestD = d; best = r.cum[i] + t * Math.sqrt(l2); }
-  }
-  return best;
 }

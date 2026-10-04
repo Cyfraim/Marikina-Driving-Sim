@@ -87,14 +87,23 @@ export function loadSatelliteImage(opts = {}) {
   const promise = new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
+    const timer = setTimeout(() => {
+      imageCache.delete(url);
+      img.onload = img.onerror = null;
+      resolve(null);
+    }, 15000);
+    img.onload = () => { clearTimeout(timer); resolve(img); };
     img.onerror = () => {
+      clearTimeout(timer);
+      imageCache.delete(url);
       console.warn('[mapLoader] Hindi na-load ang Google Static Map image.');
       resolve(null);
     };
     img.src = url;
   });
   imageCache.set(url, promise);
+  // Bound session memory while travelling; no persistent imagery storage.
+  while (imageCache.size > 18) imageCache.delete(imageCache.keys().next().value);
   return promise;
 }
 

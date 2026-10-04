@@ -134,6 +134,7 @@ export class TileManager {
 
     const t0 = performance.now();
     this.builders.roads.build(b, roadGroup);
+    if (this.builders.river) this.builders.river.build(b, roadGroup);
     let tris = 0;
     let meshes = 0;
     roadGroup.traverse((o) => { if (o.isMesh) { meshes++; tris += triCount(o); } });

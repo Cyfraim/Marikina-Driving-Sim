@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { ROADS } from './roadData.js';
 import { gpsToLocal, terrainHeight } from '../utils/geo.js';
 import { ROAD_LINES, SW_WIDTH, sidewalkWidth, mulberry32 } from '../utils/roadLayout.js';
+import { getRoadProfile } from '../utils/RoadProfile.js';
 
 // NOTE: SW_WIDTH ay imported mula sa roadLayout.js (single source of truth)
 // - dapat TUGMA ito sa boundary.js RoadConfinement limit computation.
@@ -33,7 +34,7 @@ const SW_HEIGHT = 0.15;        // taas ng bangketa/curb (tulad sa Nangka)
 // ground plane ay LALO lang lumalabas sa mga labasan (open fields).
 const LOT_WIDTH = 6.0;
 const LOT_MIN_FROM_CENTER = 15.0;
-const LOT_Y = 0.0;             // bahagyang ibaba sa bangketa
+const LOT_Y = 0.005;           // above ground, below road and sidewalk
 const DASH_LEN = 3;            // haba ng puting dash sa gitna
 const DASH_GAP = 3;
 const MARK_W = 0.14;           // lapad ng lane marking
@@ -50,8 +51,8 @@ const MARK_COLOR = 0xdddddd;
 // Spacing ng wear pass. Maliit ang halaga => mas patag ang mga quad, pero
 // mas maraming triangles. 4 m ay kasyahang patag sa 0.4 m/s na slope.
 const WEAR_SAMPLE = 6;
-const SIDE_SAMPLE = 3;         // max spacing (m) ng sidewalk samples
-const LOT_SAMPLE = 6;          // spacing ng lot fill strip (mas malaki, ok lang)
+const SIDE_SAMPLE = 10;        // retain all source bends; subdivide long runs only
+const LOT_SAMPLE = 16;        // planar frontage needs less redundant tessellation
 const UP = [0, 1, 0];
 
 // Kulay base sa OSM `surface` tag:
@@ -383,6 +384,7 @@ export class Roads {
     this.group = new THREE.Group();
     scene.add(this.group);
     this.collisionBoxes = []; // kalsada = drivable, walang collision box
+    this.surfaceRoughness = null; // Current weather, inherited by streamed tiles.
 
     // FIX 2: ang conversion at ang junction grid ay GINAWA ISANG BESES sa
     // constructor. Bago, nasa build() sila - kaya kung magbu-build tayo ng
@@ -398,7 +400,8 @@ export class Roads {
       let pts = r.pts.map(([lat, lon]) => gpsToLocal(lat, lon));
       pts = pts.filter((p, i) => i === 0 || Math.hypot(p.x - pts[i - 1].x, p.z - pts[i - 1].z) > 0.05);
       if (pts.length < 2) continue;
-      const rd = { name: r.name, cls: r.cls, sw: r.sw, mk: r.mk, half: r.w / 2, pts };
+      const profile = getRoadProfile(r);
+      const rd = { name: r.name, cls: r.cls, sw: r.sw, mk: r.mk, profile, half: profile.carriageWidth / 2, pts };
       rd.surf = SURFACE_COLORS[r.surf] !== undefined ? r.surf : 'asphalt';
       rd.minX = Math.min(...pts.map((p) => p.x));
       rd.maxX = Math.max(...pts.map((p) => p.x));
@@ -605,6 +608,7 @@ export class Roads {
     const walkTop = new MeshBuilder();
     const curbFaces = new MeshBuilder();
     const lotFill = new MeshBuilder();
+    const frontageConcrete = new MeshBuilder();
     const marks = new MeshBuilder();
     // Fix 6: tatlong hiwalay na builder dahil tatlong magkaibang kulay
     const wearPatch = new MeshBuilder();
@@ -635,7 +639,7 @@ export class Roads {
           };
           this.addSurface(surfaceByType[rd.surf], piece);
           if (rd.sw !== 'none') this.addSidewalk(walkTop, curbFaces, piece, i, inJunction);
-          this.addLotFill(lotFill, piece, i, inJunction);
+          this.addLotFill(lotFill, piece, i, inJunction, frontageConcrete);
           if (rd.mk) this.addMarkings(marks, piece, i, inJunction);
           this.addWear(wearPatch, wearEdge, wearMan, piece, i, inJunction);
         }
@@ -646,7 +650,7 @@ export class Roads {
       // "Lot fill" strip: 6 m mula sa labas ng bangketa, palaging umaabot
       // ng >= 15 m mula sa centerline (Fix 2). Pinapalitan ang berdeng lupa
       // sa tabi ng kalsada ng kongkreto/lupa.
-      this.addLotFill(lotFill, rd, i, inJunction);
+      this.addLotFill(lotFill, rd, i, inJunction, frontageConcrete);
       if (rd.mk) this.addMarkings(marks, rd, i, inJunction);
       this.addWear(wearPatch, wearEdge, wearMan, rd, i, inJunction);
     }
@@ -657,7 +661,7 @@ export class Roads {
       if (b.count === 0) continue;
       const mat = new THREE.MeshStandardMaterial({
         color: SURFACE_COLORS[type],
-        roughness: type === 'concrete' ? 0.95 : 0.85,
+        roughness: this.surfaceRoughness ?? (type === 'concrete' ? 0.95 : 0.85),
       });
       // PHASE 2D: markahan bilang "kalsada" para madaling hanapin ng
       // Game.setWetness() (basang kalsada = mas mababa ang roughness).
@@ -668,8 +672,9 @@ export class Roads {
       walkTop.build(new THREE.MeshStandardMaterial({ color: SIDEWALK_COLOR, roughness: 0.7 }))
     );
     target.add(
-      lotFill.build(new THREE.MeshStandardMaterial({ color: LOT_FILL_COLOR, roughness: 0.95 }))
+      lotFill.build(new THREE.MeshStandardMaterial({ color: 0x9e8c6e, roughness: 0.95 }))
     );
+    target.add(frontageConcrete.build(new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.95 })));
     target.add(
       curbFaces.build(new THREE.MeshStandardMaterial({ color: 0x999999, roughness: 0.8 }))
     );
@@ -719,16 +724,22 @@ export class Roads {
   // sa curb) hanggang 20 m mula sa curb. Ito ang pinapalitan ng dating
   // berdeng ground plane - sa lalim ng Nangka halos lahat ng tabi ng kalsada
   // ay sementadong lote o lupa, hindi damo (spec Fix 2/5).
-  addLotFill(b, rd, idx, inJunction) {
+  addLotFill(b, rd, idx, inJunction, concrete = b) {
     // ang panig na wala nang bangketa = panig na 'left'/'both' (mas maraming
     // espasyo). Panig na may bangketa na 'right' ay kailangan din ng fill
     // sa labas ng curb.
     const line = densify(rd.pts, LOT_SAMPLE);
     const nrm = vertexNormals(line);
-    const sides = rd.sw === 'right' ? [1, -1] : [1];
+    const sides = [1, -1];
     for (const sign of sides) {
-      const dIn = rd.half + (rd.sw !== 'none' && rd.sw !== 'left' ? sidewalkWidth(rd.cls) : 0);
-      const dOut = Math.max(dIn + LOT_WIDTH, LOT_MIN_FROM_CENTER);
+      const sidewalk = sign > 0 ? rd.profile.leftSidewalkWidth : rd.profile.rightSidewalkWidth;
+      const curb = rd.half + rd.profile.shoulderWidth;
+      // 0-2m concrete, 2-8m compacted lot. Preserve wider authored sidewalks.
+      for (const [builder, dIn, dOut] of [
+        [concrete, curb + sidewalk, curb + Math.max(2, sidewalk)],
+        [b, curb + Math.max(2, sidewalk), curb + 8],
+      ]) {
+      if (dOut <= dIn) continue;
       const rows = [];
       for (let i = 0; i < line.length; i++) {
         const p = line[i];
@@ -754,13 +765,14 @@ export class Roads {
           for (let i = start; i < end; i++) {
             const r0 = rows[i];
             const r1 = rows[i + 1];
-            b.quadFacing(
+            builder.quadFacing(
               [r0.ix, r0.hi, r0.iz], [r0.ox, r0.ho, r0.oz],
               [r1.ox, r1.ho, r1.oz], [r1.ix, r1.hi, r1.iz], UP
             );
           }
         }
         start = end + 1;
+      }
       }
     }
   }
@@ -769,9 +781,11 @@ export class Roads {
   addSidewalk(topB, faceB, rd, idx, inJunction) {
     const line = densify(rd.pts, SIDE_SAMPLE);
     const nrm = vertexNormals(line);
-    const sign = rd.sw === 'right' ? -1 : 1;
-    const dIn = rd.half;                        // gilid ng kalsada
-    const dOut = rd.half + sidewalkWidth(rd.cls); // labas ng bangketa (Fix 5)
+    for (const sign of [1, -1]) {
+    const width = sign > 0 ? rd.profile.leftSidewalkWidth : rd.profile.rightSidewalkWidth;
+    if (!width) continue;
+    const dIn = rd.half + rd.profile.shoulderWidth;
+    const dOut = dIn + width;
     const rows = [];
     for (let i = 0; i < line.length; i++) {
       const p = line[i];
@@ -796,6 +810,7 @@ export class Roads {
       while (end + 1 < rows.length && rows[end + 1].vis) end++;
       if (end > start) this.emitSidewalkRun(topB, faceB, rows, start, end, rd);
       start = end + 1;
+    }
     }
   }
 

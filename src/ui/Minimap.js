@@ -16,6 +16,7 @@
 import { MAP_ORIGIN } from '../world/roadData.js';
 import { ROAD_LINES } from '../utils/roadLayout.js';
 import { loadSatelliteImage, hasApiKey, metersPerPixel } from '../utils/mapLoader.js';
+import { satelliteGrid } from '../utils/satelliteGrid.js';
 
 const VIEW_M = 300;        // radius (m) ng nakikitang mundo  (spec)
 const SIZE = 200;         // minimap size (CSS px) - spec: 200x200
@@ -51,6 +52,10 @@ export class Minimap {
     this.canvas.height = SIZE * this.dpr;
 
     this.satellite = null;
+    this.satelliteTiles = [];
+    this.gridCenter = null;
+    this.gridLoading = false;
+    this.gridRetryAt = 0;
     this.usingSatellite = false;
     this.tileMPerPx = metersPerPixel(MAP_ORIGIN.lat, TILE.zoom);
     // FIX 2: PX-PER-METRE (dating: metre-per-pixel = inverted, 96 m radius).
@@ -94,20 +99,39 @@ export class Minimap {
       this.usingSatellite = false;
       return;
     }
-    const img = await loadSatelliteImage({
-      center: MAP_ORIGIN,
-      zoom: TILE.zoom,
-      width: TILE.size,
-      height: TILE.size,
-      mapType: 'satellite',
-    });
-    this.satellite = img;
-    this.usingSatellite = !!img;
+    const p = this.game.vehicle?.position || { x: 0, z: 0 };
+    return this.refreshSatellite(p);
+  }
+
+  async refreshSatellite(position, { enabled = hasApiKey, loadImage = loadSatelliteImage } = {}) {
+    if (this.gridLoading || Date.now() < this.gridRetryAt || !enabled()) return;
+    const center = { x: position.x, z: position.z };
+    if (this.gridCenter && Math.hypot(center.x - this.gridCenter.x, center.z - this.gridCenter.z) <= 500) return;
+    this.gridLoading = true;
+    try {
+      const tiles = satelliteGrid(center.x, center.z, TILE.zoom, TILE.size);
+      await Promise.all(tiles.map(async tile => {
+        tile.image = await loadImage({ center: tile.center, zoom: TILE.zoom,
+          width: TILE.size, height: TILE.size, mapType: 'satellite' });
+      }));
+      if (tiles.every(tile => tile.image)) {
+        // Swap atomically: never draw an incomplete new grid over the old one.
+        this.satelliteTiles = tiles;
+        this.gridCenter = center;
+        this.usingSatellite = true;
+      } else this.gridRetryAt = Date.now() + 60000;
+    } catch (error) {
+      console.warn('[Minimap] Satellite grid unavailable; retaining vector/previous grid.', error);
+      this.gridRetryAt = Date.now() + 60000;
+    } finally {
+      this.gridLoading = false;
+    }
   }
 
   update() {
     const v = this.game.vehicle;
     if (!v) return;
+    void this.refreshSatellite(v.position);
     const ctx = this.ctx;
     const W = this.vp.w, H = this.vp.h;
     const cx = W / 2, cy = H / 2;
@@ -172,6 +196,7 @@ export class Minimap {
 
     // --- scale indicator "300m" sa ibaba (spec) -----------------------------
     this.drawScale(W, H);
+    if (this.usingSatellite) this.drawSatelliteAttribution(W, H);
 
     // --- THIN WHITE BORDER sa paligid ng circle (spec) -----------------------
     ctx.beginPath();
@@ -188,12 +213,41 @@ export class Minimap {
   drawSatellite(v) {
     const ctx = this.ctx;
     // scale: tile pixel -> minimap pixel
-    const scale = this.tileMPerPx / this.pxPerM;
+    if (this.satelliteTiles?.length) {
+      for (const tile of this.satelliteTiles) {
+        ctx.drawImage(tile.image, tile.minX - v.position.x, tile.minZ - v.position.z,
+          tile.maxX - tile.minX, tile.maxZ - tile.minZ);
+      }
+      return;
+    }
+    const scale = this.tileMPerPx;
     const w = TILE.size * scale;
     // player pos sa tile pixel (tile center = MAP_ORIGIN = scene 0,0)
     const imgX = TILE.size / 2 + v.position.x / this.tileMPerPx;
     const imgY = TILE.size / 2 + v.position.z / this.tileMPerPx;
     ctx.drawImage(this.satellite, -imgX * scale, -imgY * scale, w, w);
+  }
+
+  drawSatelliteAttribution(W, H) {
+    // Keep source attribution visible outside the rotating/circular clip.
+    // Distinct provider credits can vary by tile; show each source footer.
+    if (!this.attribution) {
+      this.attribution = document.createElement('div');
+      this.attribution.style.cssText = 'position:absolute;right:0;top:100%;background:#fff;width:640px;max-width:calc(100vw - 24px);overflow:auto;max-height:72px;z-index:2;line-height:0;';
+      this.canvas.parentElement?.appendChild(this.attribution);
+    }
+    if (this.attributionGrid === this.satelliteTiles) return;
+    this.attributionGrid = this.satelliteTiles;
+    this.attribution.replaceChildren();
+    for (const tile of this.satelliteTiles) {
+      const footer = document.createElement('canvas');
+      footer.width = tile.image.naturalWidth || TILE.size;
+      footer.height = 24;
+      footer.style.cssText = 'display:block;';
+      footer.getContext('2d').drawImage(tile.image, 0, (tile.image.naturalHeight || TILE.size) - 24,
+        footer.width, 24, 0, 0, footer.width, 24);
+      this.attribution.appendChild(footer);
+    }
   }
 
   // Vector: tunay na kalsada mula sa roadData (naka-rotate na ang context)

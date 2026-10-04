@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import { ROAD_LINES, sampleRoad, mulberry32 } from '../utils/roadLayout.js';
 import { getRoadGraph } from '../utils/RoadGraph.js';
 import { terrainHeight } from '../utils/geo.js';
+import { canRunTraffic } from '../utils/RoadProfile.js';
 
 const CULL_M = 500;                            // culling radius (spec)
 const HEADON_M = 5;                            // player < 5 m = head-on (spec)
@@ -39,7 +40,7 @@ class NPCVehicle {
   constructor(kind, roadIndex, dir, t, rnd, group) {
     this.kind = kind;
     this.ri = roadIndex;
-    this.dir = dir;                 // +1 = forward, -1 = reverse
+    this.dir = lineByRi(roadIndex)?.isOneWay ? 1 : dir; // normalized geometry
     this.t = t;                     // distansya mula sa simula ng polyline
     this.speed = SPD_MIN + rnd() * (SPD_MAX - SPD_MIN);
     this.cruise = this.speed;       // "normal" na bilis (para sa weather)
@@ -144,7 +145,8 @@ class NPCVehicle {
   sync() {
     const r = this.road;
     if (!r || r.pts.length < 2) return;
-    const d = this.dir > 0 ? this.t : r.len - this.t;
+    // t is always measured from the first road point, kahit reverse.
+    const d = this.t;
     // lateral offset: slight na kanan ng centerline (like a real lane)
     const s = sampleRoad(this.ri, d, r.half * 0.35 * this.dir);
     this.x = s.x; this.z = s.z;
@@ -255,10 +257,11 @@ class NPCVehicle {
       for (const ri of g.candidateRoads(node)) {
         if (ri === this.ri) continue;
         const nr = lineByRi(ri);
-        if (!nr || nr.pts.length < 2) continue;
+        if (!nr || nr.pts.length < 2 || !canRunTraffic(nr)) continue;
         const d0 = Math.hypot(nr.pts[0].x - atEnd.x, nr.pts[0].z - atEnd.z);
         const d1 = Math.hypot(nr.pts[nr.pts.length - 1].x - atEnd.x,
                               nr.pts[nr.pts.length - 1].z - atEnd.z);
+        if (nr.isOneWay && d0 > d1) continue;
         cand.push({ ri, nr, d: Math.min(d0, d1) });
       }
       // ayusin ang pinakamalapit na dulo para magmamarcha nang maayos
@@ -276,6 +279,7 @@ class NPCVehicle {
       }
     }
     // walang konektadong kalsada -> REVERSE (spec)
+    if (r.isOneWay) { this.speed = 0; return; } // no illegal U-turn at dead end
     this.dir *= -1;
     this.t = this.dir > 0 ? 0 : this.road.len;
   }
@@ -296,6 +300,7 @@ export class NPCManager {
     scene.add(this.group);
     this.vehicles = [];
     this.colliderBoxes = [];   // AABB para sa player (inau-update kada frame)
+    this.enabled = true;
     this.spawn(counts);
   }
 
@@ -304,7 +309,7 @@ export class NPCManager {
     // Kandidato: kalsadang hindi masyadong maikli, at hindi alley/track
     const candidates = [];
     for (const r of ROAD_LINES) {
-      if (r.len < 80) continue;
+      if (r.len < 80 || !canRunTraffic(r)) continue;
       if (r.cls === 'service' || r.cls === 'track') continue;
       candidates.push(r.i);
     }
@@ -327,7 +332,17 @@ export class NPCManager {
    * @param lights     TrafficLightSystem (2A) - NPC huminto sa pulang ilaw
    * @returns {THREE.Box3[]} - i-reuse na array (walang allocation kada frame)
    */
+  setEnabled(enabled) {
+    this.enabled = !!enabled;
+    this.group.visible = this.enabled;
+    if (!this.enabled) {
+      this.colliderBoxes.length = 0;
+      for (const v of this.vehicles) v.active = false;
+    }
+  }
+
   update(delta, playerPos, speedScale = 1, lights = null) {
+    if (!this.enabled) return this.colliderBoxes;
     for (const v of this.vehicles) v.update(delta, playerPos, speedScale, lights);
     // Mga AABB collider para sa player - i-clear ang lumang (walang bagong array)
     const out = this.colliderBoxes;

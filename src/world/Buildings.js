@@ -11,7 +11,7 @@ import { ColoredMeshBuilder } from '../utils/coloredMesh.js';
 import { terrainHeight } from '../utils/geo.js';
 import {
   ROAD_LINES, sampleRoad, safeSpot, FRONTAGE, getMajorJunctions, mulberry32,
-  SW_WIDTH, sidewalkWidth, clearOfCorridors,
+  SW_WIDTH, sidewalkWidth, clearOfCorridors, reservedGeography,
 } from '../utils/roadLayout.js';
 
 // --- FIX 3: height mix 30% / 50% / 20% (1/2/3 storey) ---
@@ -21,6 +21,17 @@ import {
 // Cycle ng 10: 3x 1-storey (4 m), 5x 2-storey (7 m), 2x 3-storey (10 m)
 //   = eksaktong 30% / 50% / 20%
 const HEIGHT_CYCLE = [4, 4, 4, 7, 7, 7, 7, 7, 10, 10];
+
+export function ownsBuilding(bounds, point) {
+  return point.x >= bounds.minX && point.x < bounds.maxX && point.z >= bounds.minZ && point.z < bounds.maxZ;
+}
+
+export function roofStyle(rnd) {
+  const roll = rnd();
+  const color = roll < 0.5 ? 0x9b4a1a : roll < 0.75 ? 0x8b2525 : roll < 0.9 ? 0xc8c8c8 : 0x4a6b8a;
+  // Concrete roofs are flat; 70% of all residential roofs are gabled.
+  return { color, gable: color !== 0xc8c8c8 && rnd() < 0.7 / 0.85 };
+}
 
 // --- FIX 3: facade palette na i-cycle kada lot (hindi random) ---
 // cream, faded blue, salmon, white, yellow - saklaw ng tunay na Marikina
@@ -46,37 +57,8 @@ const WALL_COLORS = [
 //   4. minsan weathered blue GI
 // Hindi cycle kundi WEIGHTED pick, para organic ang tanaw at pare-pareho
 // ang distribution kahit gaano man kadalas ma-rebuild (deterministic).
-const ROOF_KINDS = [
-  { w: 50, lo: 0x8b4513, hi: 0xa0522d }, // rusty corrugated GI (saddle brown - sienna)
-  { w: 25, lo: 0x8b2525, hi: 0xcc3333 }, // faded red iron sheet (firebrick - red)
-  { w: 15, lo: 0xc8c8c8, hi: 0xdddddd }, // bare concrete flat roof
-  { w: 10, lo: 0x4a6b8a, hi: 0x4477aa }, // weathered blue GI
-];
-const ROOF_TOTAL_W = ROOF_KINDS.reduce((n, k) => n + k.w, 0);
-
-/**
- * Weighted roof colour na may per-building weathering jitter.
- * Ang jitter ay nasa loob ng bawat kind's range, kaya hindi kailanman
- * lalabas sa rust/red/concrete/blue palette.
- */
-function pickRoofColor(rnd) {
-  let r = rnd() * ROOF_TOTAL_W;
-  let k = ROOF_KINDS[ROOF_KINDS.length - 1];
-  for (const kind of ROOF_KINDS) {
-    r -= kind.w;
-    if (r <= 0) { k = kind; break; }
-  }
-  const t = rnd(); // 0..1 - magkakaibang antas ng pananawis sa isang uri
-  const ch = (shift) => {
-    const a = (k.lo >> shift) & 255;
-    const b = (k.hi >> shift) & 255;
-    return Math.round(a + (b - a) * t);
-  };
-  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
-}
-
 // Tarpaulin banner (Fix 3) - maliwanag na brand ng palda sa pader ng tindahan
-const TARP_COLORS = [0xcc0000, 0x0044cc, 0xffcc00, 0x006600];
+const TARP_COLORS = [0xcc0000, 0x0044cc, 0xffcc00];
 // Maliwanag na kulay ng signage
 const SIGN_COLORS = [
   0xfc4353, 0xf4d03f, 0x2ecc71, 0x3498db, 0xe67e22, 0xffffff,
@@ -139,7 +121,7 @@ class SpatialHash {
 // NOTE: dapat MATCH ang convention sa ColoredMeshBuilder.box():
 //   local X axis -> ( cos, -sin ),   local Z axis -> ( sin, cos )
 // Kung ibang convention, susiin ang box na "mirror" - mali ang overlap test.
-function obbOverlap(a, b) {
+export function obbOverlap(a, b) {
   const axes = [
     [a.c, -a.s], [a.s, a.c],
     [b.c, -b.s], [b.s, b.c],
@@ -161,6 +143,9 @@ export class Buildings {
     // OBB colliders para sa building (walang lumalabas na AABB corner)
     this.obbColliders = [];
     this.footprints = []; // tunay na OBB footprint ng bawat bahay (para sa audit)
+    this.registry = new SpatialHash(8);
+    this.catalog = null;
+    this.facadeCounts = { counters: 0, grilleStrips: 0, banners: 0, fences: 0, waterTanks: 0, airConditioners: 0 };
     scene.add(this.group);
   }
 
@@ -173,16 +158,16 @@ export class Buildings {
    *                tuloy-tuloy ang bilang.
    * @param target  THREE.Group na tatanggapin ang mesh.
    */
-  build(bounds = null, target = this.group) {
-    const mesh = new ColoredMeshBuilder();
+  plan() {
+    if (this.catalog) return;
+    // Shared city-wide registry: checked even when neighbouring tiles are unloaded.
+    const bounds = { minX: -6000, maxX: 6000, minZ: -6000, maxZ: 6000 };
+    this.catalog = [];
     const junctions = getMajorJunctions();
     FRONTAGE.clear();
     // Spatial hash ng mga naglalagay na building (para hindi sila
     // magpapatong-patong sa pagitan ng magkabilang kalsada)
-    const occupied = new SpatialHash(8);
-    let placed = 0;
-    let shops = 0;
-    let rejectedOverlap = 0;
+    const occupied = this.registry;
     // FIX 3: counter para sa pag-cycle ng facade colors kada lot
     let facadeIdx = 0;
 
@@ -193,14 +178,19 @@ export class Buildings {
     // paulit-ulit (deterministic) ang resulta.
     const roadSeed = (ri) => mulberry32((0x4e414e47 ^ Math.imul(ri + 1, 2654435761)) >>> 0);
 
-    ROAD_LINES.forEach((road, ri) => {
+    // Main-road frontage wins contested lots, rather than whichever OSM way
+    // happened to occur first. Preserve original road indices for stable IDs.
+    const priority = road => road.cls === 'primary' || road.cls === 'secondary' ? 0 : 1;
+    const planningOrder = ROAD_LINES.map((road, ri) => ({ road, ri }))
+      .sort((a, b) => priority(a.road) - priority(b.road) || a.ri - b.ri);
+    planningOrder.forEach(({ road, ri }) => {
       if (!BUILD_CLASSES.has(road.cls)) return;
       // FIX 2: sa tile mode, kailangan ng kalsadang ito na dumadaan sa box
       // (may margin, para hindi maputol ang mga dulo). Sa full-map mode,
       // pinananatili ang dating MAX_RADIUS na LAYO mula sa sentro.
       if (bounds) {
-        if (road.maxX < bounds.minX || road.minX > bounds.maxX ||
-            road.maxZ < bounds.minZ || road.minZ > bounds.maxZ) return;
+        if (road.maxX + 32 < bounds.minX || road.minX - 32 >= bounds.maxX ||
+            road.maxZ + 32 < bounds.minZ || road.minZ - 32 >= bounds.maxZ) return;
       } else if (road.maxX < -MAX_RADIUS || road.minX > MAX_RADIUS ||
                  road.maxZ < -MAX_RADIUS || road.minZ > MAX_RADIUS) return;
 
@@ -214,7 +204,6 @@ export class Buildings {
       const frontBase = major ? 0 : 1.2;
       const frontMax = major ? 0.5 : 1.4;
       // Sidewalk gap: bangketa (per-class, Fix 5) + front setback
-      const swGap = road.hasSW ? sidewalkWidth(road.cls) : 0;
 
       // --- FIX 3: max 3 m gap sa main roads. Instead of a fixed stride, pipiliin
       // muna ng LAPAD ng lot, saka stride = lapad + puwang (<= 3 m) para
@@ -226,7 +215,8 @@ export class Buildings {
         const lotW = major ? 8 + rnd() * 6 : 7.5 + rnd() * 4.5;
         // Main roads: max 3 m puwang. Residential: mas malaki angspacing pero
         // siksik pa rin (~11-18 m stride) para hindi bumaba ang bilang ng bahay.
-        const gap = major ? rnd() * GAP_MAX : 2 + rnd() * 4;
+        // Two 0.65m roof/fence margins must fit between neighbouring lots.
+        const gap = major ? 1.4 + rnd() * (GAP_MAX - 1.4) : 2 + rnd() * 4;
         for (const side of [1, -1]) {
           // FIX 3: sa main roads HINDI na may random na "bakanteng lote" -
           // dahil lumalampas sa 3 m max gap. Ang puwang ay controlled ng
@@ -262,17 +252,18 @@ export class Buildings {
           }
           // --- FIX 2: setback 0-0.5 m mula sa curb (commercial)
           const front = frontBase + rnd() * frontMax;
-          const off = road.half + swGap + front + depth / 2;
+          const sidewalk = side > 0 ? road.profile.leftSidewalkWidth : road.profile.rightSidewalkWidth;
+          const off = road.half + road.profile.shoulderWidth + sidewalk + road.profile.drainageWidth + front + depth / 2;
           const s = sampleRoad(ri, d, side * off);
           // FIX 2: sa tile mode, DITO napapasok ang bahay - ang kalkuladong
           // sentro ay dapat nasa loob ng tile box. Ito ang nagsisilbing
           // "owner" check: isang bahay lamang ang gumagawa nito, kaya walang
           // kopyahang geometry sa pagitan ng magkabilang tile.
           if (bounds) {
-            if (s.x < bounds.minX || s.x > bounds.maxX ||
-                s.z < bounds.minZ || s.z > bounds.maxZ) continue;
+            if (!ownsBuilding(bounds, s)) continue;
           } else if (Math.hypot(s.x, s.z) > MAX_RADIUS + 60) continue;
           const halfSize = Math.max(width, depth) / 2;
+          if (reservedGeography(s.x, s.z, Math.hypot(width, depth) / 2)) continue;
           if (!safeSpot(s.x, s.z, halfSize, ri)) continue;
 
           // harap ng bahay = patungo sa kalsada
@@ -286,10 +277,10 @@ export class Buildings {
           // overlap check vs naunang bahay (magkabilang kalsada / magkapitid)
           const fp = {
             x: s.x, z: s.z,
-            hx: width / 2, hz: depth / 2,   // local X = width, local Z = depth
+            hx: width / 2 + 0.65, hz: depth / 2 + 1.45, // include roof/fence/awning projections
             c: Math.cos(yaw), s: Math.sin(yaw),
           };
-          if (occupied.overlaps(fp)) { rejectedOverlap++; continue; }
+          if (occupied.overlaps(fp)) continue;
 
           // tindahan kung malapit sa intersection o pangunahing kalsada
           // primary/secondary -> laging commercial; residential -> house
@@ -300,9 +291,10 @@ export class Buildings {
           // i-record ang tunay na footprint (para sa audit/tools)
           // NOTE: `dAlong` = distansya sa kalsada. Kailangan ng tools/check-lots
           // para sukatin ang tunay na gap (sa XZ maling pagkakasunod).
-          this.footprints.push({
-            ...fp, w: width, d: depth, h: height, shop: isShop, ri, side, dAlong: d,
-          });
+          const lot = { ...fp, envelope: fp, hx: width / 2, hz: depth / 2,
+            id: `${ri}:${lotIdx}:${side}`, w: width, d: depth, h: height,
+            shop: isShop, ri, side, dAlong: d, yaw, seed: (Math.imul(ri + 1, 2654435761) ^ Math.imul(lotIdx + 1, 2246822519) ^ side) >>> 0 };
+          this.catalog.push(lot);
           // taas ng lupa sa footprint (para nasa slope ang bahay)
           const groundY = terrainHeight(s.x, s.z);
           // FIX 3: i-cycle ang facade color kada lot (cream/faded blue/
@@ -310,10 +302,7 @@ export class Buildings {
           // ang tanaw sa kalsada.
           const wall = FACADE_COLORS[facadeIdx++ % FACADE_COLORS.length];
           // i-record din ang kulay para ma-verify ng tools/check-lots.mjs
-          this.footprints[this.footprints.length - 1].wall = wall;
-          if (isShop) this.addShop(mesh, s, width, depth, height, yaw, rnd, groundY, wall);
-          else this.addHouse(mesh, s, width, depth, height, yaw, rnd, groundY, ri, wall);
-          if (isShop) shops++;
+          lot.wall = wall;
 
           // --- Collision: ORIENTED box (OBB), hindi axis-aligned AABB ---
           // BUG: ang dating AABB (|cos|*w/2 + |sin|*d/2) ay umaabo sa
@@ -324,15 +313,14 @@ export class Buildings {
           // FIX: itago ang OBB (center + yaw + half-extents) sa isang
           // espesyal na listahan, at gawan ng OBB-vs-AABB test ang
           // Vehicle.checkCollision. Eksakto, at walang bulang espasyo.
-          this.obbColliders.push({
+          lot.collider = {
             x: s.x, y: groundY + height / 2, z: s.z,
             hx: width / 2, hy: height / 2, hz: depth / 2,
             cos: Math.cos(yaw), sin: Math.sin(yaw),
-          });
+          };
           // nakatala ang frontage para mapunan ng puno ang mga puwang mamaya
           FRONTAGE.add(ri, side, d - width / 2 - 1, d + width / 2 + 1);
           occupied.insert(fp);
-          placed++;
         }
         // --- FIX 3: advance sa susunod na lot (max 3 m puwang sa main roads)
         d += lotW + gap;
@@ -340,16 +328,40 @@ export class Buildings {
       }
     });
 
+  }
+
+  build(bounds = null, target = this.group) {
+    this.plan();
+    // Replace audit records on a rebuild; persistent placement lives in catalog.
+    this.footprints = this.footprints.filter((lot) => bounds ? !ownsBuilding(bounds, lot) : Math.hypot(lot.x, lot.z) > MAX_RADIUS + 60);
+    const mesh = new ColoredMeshBuilder();
+    FRONTAGE.clear();
+    let placed = 0, shops = 0;
+    for (const lot of this.catalog) {
+      if (bounds ? !ownsBuilding(bounds, lot) : Math.hypot(lot.x, lot.z) > MAX_RADIUS + 60) continue;
+      const rnd = mulberry32(lot.seed);
+      const gy = terrainHeight(lot.x, lot.z);
+      this.currentLot = lot;
+      if (lot.shop) this.addShop(mesh, lot, lot.w, lot.d, lot.h, lot.yaw, rnd, gy, lot.wall);
+      else this.addHouse(mesh, lot, lot.w, lot.d, lot.h, lot.yaw, rnd, gy, lot.ri, lot.wall);
+      this.footprints.push(lot);
+      this.obbColliders.push(lot.collider);
+      FRONTAGE.add(lot.ri, lot.side, lot.dAlong - lot.w / 2 - 1, lot.dAlong + lot.w / 2 + 1);
+      placed++;
+      if (lot.shop) shops++;
+    }
+    this.currentLot = null;
     const mat = new THREE.MeshStandardMaterial({
       vertexColors: true, roughness: 0.85, metalness: 0.0,
     });
     const m = mesh.build(mat);
+    m.castShadow = true;
     target.add(m);
     // FIX 2: sa tile mode, huwag mag-log kada tile (libu-libong linya).
     if (!bounds) {
       console.log(
         `[Buildings] ${placed} na bahay/tindahan (${shops} tindahan), ` +
-        `${rejectedOverlap} tinanggap dahil magpapatong-patong, ${mesh.triangles} tris`
+          `${mesh.triangles} tris`
       );
     }
     return { placed, shops, tris: mesh.triangles };
@@ -372,7 +384,9 @@ export class Buildings {
   // Single-storey house (residential streets): box + gable roof + fence
   addHouse(mesh, s, width, depth, height, yaw, rnd, gy = 0, ri = -1, wall = null) {
     const wallC = wall === null ? WALL_COLORS[(rnd() * WALL_COLORS.length) | 0] : wall;
-    const roof = pickRoofColor(rnd);
+    const style = roofStyle(rnd);
+    const roof = style.color;
+    if (this.currentLot) { this.currentLot.roof = roof; this.currentLot.gable = style.gable; }
     const c = s.x;
     const z = s.z;
     // katawan
@@ -380,7 +394,7 @@ export class Buildings {
     // --- Fix 1: 70% gable (may bubong na makapal), 30% flat concrete.
     // Ang gable ang default sa residential; ang flat ay pang mga -expansion
     // ng original na kubo.
-    if (rnd() < 0.7) {
+    if (style.gable) {
       const rh = 1.2 + rnd() * 0.8;
       mesh.gable(c, gy + height, z, width + 0.6, depth + 0.6, rh, roof, yaw);
     } else {
@@ -416,12 +430,39 @@ export class Buildings {
       for (let k = -1; k <= 1; k++) {
         mesh.box(frontX + px * (so + k * 0.28), winY, frontZ + pz * (so + k * 0.28),
           0.05, 1.0, 0.08, 0x6b6b6b, yaw);
+        this.facadeCounts.grilleStrips++;
       }
     }
     // Maliit na bakuran (fence) sa may-front - tanda ng residential
     const rd = ROAD_LINES[ri];
     if (rd && rd.cls !== 'primary' && rd.cls !== 'secondary') {
       this.addFence(mesh, s, width, depth, height, yaw, gy, rnd);
+      this.facadeCounts.fences++;
+    }
+    this.addUtilities(mesh, s, width, depth, height, yaw, rnd, gy, style.gable ? 2.2 : 0.2);
+  }
+
+  addUtilities(mesh, s, width, depth, height, yaw, rnd, gy, roofRise = 0.24) {
+    if (rnd() < 0.25) {
+      // Low-poly concrete tangke sa bubong, 0.8m diameter.
+      const x = s.x, z = s.z, y = gy + height + roofRise;
+      for (let i = 0; i < 8; i++) {
+        const a = i * Math.PI / 4, b = (i + 1) * Math.PI / 4;
+        mesh.quad([x + Math.cos(a) * 0.4, y, z + Math.sin(a) * 0.4],
+          [x + Math.cos(b) * 0.4, y, z + Math.sin(b) * 0.4],
+          [x + Math.cos(b) * 0.4, y + 0.9, z + Math.sin(b) * 0.4],
+          [x + Math.cos(a) * 0.4, y + 0.9, z + Math.sin(a) * 0.4], 0xaaaaaa,
+          [Math.cos((a + b) / 2), 0, Math.sin((a + b) / 2)]);
+        mesh.tri([x, y + 0.9, z], [x + Math.cos(a) * 0.4, y + 0.9, z + Math.sin(a) * 0.4],
+          [x + Math.cos(b) * 0.4, y + 0.9, z + Math.sin(b) * 0.4], 0xaaaaaa, [0, 1, 0]);
+      }
+      this.facadeCounts.waterTanks++;
+    }
+    if (height >= 6 && rnd() < 0.65) {
+      const off = depth / 2 + 0.15;
+      mesh.box(s.x + Math.sin(yaw) * off, gy + 4.8, s.z + Math.cos(yaw) * off,
+        0.75, 0.45, 0.3, 0x444444, yaw);
+      this.facadeCounts.airConditioners++;
     }
   }
 
@@ -482,6 +523,7 @@ export class Buildings {
     // Ang commercial buildings sa main road ay halos walang pitched roof -
     // flat slab na may 0.5 m na parapet sa palibot (laban sa tubig).
     const slab = 0xc8c8c8;
+    if (this.currentLot) { this.currentLot.roof = slab; this.currentLot.gable = false; }
     mesh.box(c, gy + h + 0.12, z, width + 0.4, 0.24, depth + 0.4, slab, yaw);
     const par = 0.5;           // taas ng parapet
     const pt = 0.16;           // kapal
@@ -520,12 +562,14 @@ export class Buildings {
       // security grille: 0.05 m na strip, 4.5 px apart
       for (let k = -1; k <= 1; k++) {
         mesh.box(wx + px * k * 0.24, wy, wz + pz * k * 0.24, 0.05, 0.8, 0.07, 0x5f5f5f, yaw);
+        this.facadeCounts.grilleStrips++;
       }
       // counter: 0.4 m deep, 0.8 m tall, sa ilalim ng bintana
       mesh.box(
         wx + fx * 0.2, gy + 0.4, wz + fz * 0.2,
         0.9, 0.8, 0.4, 0x6b4f35, yaw
       );
+      this.facadeCounts.counters++;
     }
     // recessed gate/door (Fix 3: 0x333333, 1.2 m x 2 m) - gitna ng facade
     mesh.box(frontX, gy + 1.0, frontZ, 1.2, 2.0, 0.05, 0x333333, yaw);
@@ -539,12 +583,15 @@ export class Buildings {
     for (let i = 0; i < nTarp; i++) {
       const tw = Math.min(width * 0.42, 1.6 + rnd() * 1.6);
       const to = (rnd() * 2 - 1) * (width / 2 - tw / 2 - 0.25);
-      const ty = gy + 2.0 + rnd() * 2.0; // 2-4 m
-      if (ty > gy + h - 0.9) continue;   // huwag takpan ang signage
-      mesh.box(
-        frontX + px * to + fx * 0.05, ty, frontZ + pz * to + fz * 0.05,
-        tw, 0.8, 0.05, TARP_COLORS[(rnd() * TARP_COLORS.length) | 0], yaw
-      );
+      const ty = gy + 2.0 + rnd() * Math.min(2, h - 2.5);
+      const tx = frontX + px * to + fx * 0.12;
+      const tz = frontZ + pz * to + fz * 0.12;
+      mesh.quad([tx - px * tw / 2, ty - 0.4, tz - pz * tw / 2],
+        [tx + px * tw / 2, ty - 0.4, tz + pz * tw / 2],
+        [tx + px * tw / 2, ty + 0.4, tz + pz * tw / 2],
+        [tx - px * tw / 2, ty + 0.4, tz - pz * tw / 2],
+        TARP_COLORS[(rnd() * TARP_COLORS.length) | 0], [fx, 0, fz]);
+      this.facadeCounts.banners++;
     }
 
     // awning (slanted strip) - normal ay tilted: pataas + outward
@@ -561,6 +608,7 @@ export class Buildings {
       [frontX + px * (-width / 2) + ox * out, awH - 0.4, frontZ + pz * (-width / 2) + oz * out],
       sign, awN
     );
+    this.addUtilities(mesh, s, width, depth, h, yaw, rnd, gy);
   }
 
   getCollisionBoxes() { return this.collisionBoxes; }

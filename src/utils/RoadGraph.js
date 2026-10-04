@@ -26,7 +26,9 @@ const CELL = 60;        // spatial hash cell (m)
 const INF = Infinity;
 
 export class RoadGraph {
-  constructor() {
+  constructor(roads = ROAD_LINES) {
+    this.roads = roads;
+    this.osmNodes = new Map();
     this.nodeX = [];     // node -> x
     this.nodeZ = [];     // node -> z
     this.adj = [];       // node -> [{ to, w, name }]
@@ -54,17 +56,19 @@ export class RoadGraph {
   }
 
   /** Node id mula sa mundo (x,z) - lumilikha ng bago kung wala. */
-  _nodeAt(x, z) {
+  _nodeAt(x, z, osmId = null) {
+    if (osmId != null && this.osmNodes.has(osmId)) return this.osmNodes.get(osmId);
     const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
     // ang intersection ay maaaring mahimog sa katabing cell dahil sa
     // rounding, kaya titingnan ang 3x3 na kapitidahan
-    for (let dx = -1; dx <= 1; dx++) {
+    if (osmId == null) for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
         const n = this._nodeInCell(cx + dx, cz + dz, x, z);
         if (n >= 0) return n;
       }
     }
     const id = this.nodeX.length;
+    if (osmId != null) this.osmNodes.set(osmId, id);
     this.nodeX.push(x);
     this.nodeZ.push(z);
     this.adj.push([]);
@@ -75,21 +79,22 @@ export class RoadGraph {
   }
 
   build() {
-    for (const r of ROAD_LINES) {
+    for (const r of this.roads) {
       const pts = r.pts;
       if (pts.length < 2) continue;
       // i-cache ang node kada polyline para hindi ulitin ang merge
-      let prev = this._nodeAt(pts[0].x, pts[0].z);
+      let prev = this._nodeAt(pts[0].x, pts[0].z, r.nodeIds?.[0]);
       for (let i = 1; i < pts.length; i++) {
         const p = pts[i];
-        const cur = this._nodeAt(p.x, p.z);
+        const cur = this._nodeAt(p.x, p.z, r.nodeIds?.[i]);
         const w = Math.hypot(p.x - pts[i - 1].x, p.z - pts[i - 1].z);
         if (w > 0.01 && cur !== prev) {
           // 1B: ini-store din ang `ri` (ROAD_LINES index) para sa NPC - kailangan
           // nila ito para malaman ALING kalsada ang isang edge (para makapili
           // ng "next road" sa dulo). Dati `name` lang ang naka-store.
-          this.adj[prev].push({ to: cur, w, name: r.name || '', ri: r.i });
-          this.adj[cur].push({ to: prev, w, name: r.name || '', ri: r.i });
+          const isOneWay = r.profile?.isOneWay ?? r.isOneWay ?? false;
+          this.adj[prev].push({ to: cur, w, name: r.name || '', ri: r.i, isOneWay });
+          if (!isOneWay) this.adj[cur].push({ to: prev, w, name: r.name || '', ri: r.i, isOneWay });
         }
         prev = cur;
       }

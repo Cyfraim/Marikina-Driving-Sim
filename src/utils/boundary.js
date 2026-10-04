@@ -64,7 +64,7 @@ export class RoadConfinement {
         // drivable half-width: asphalt + kerb room. HINDI kasama ang bangketa -
         // dito nakatayo ang poste/ilaw/puno/kanal, kaya dapat manatili ang
         // kotse sa loob ng ASPHALT (Fix 1 invisible-wall fix).
-        const limit = road.half + KERB_ROOM;
+        const limit = (road.profile ? road.profile.carriageWidth / 2 : road.half) + KERB_ROOM;
         // NOTE: i-remember ang road index - kailangan para malaman kung
         // ANG KALSAYANG inyakan ay ibang kalsada (cross-road conflict).
         // Kasama rin ang TANGENT (direksyon ng kalsada) - stable ito kahit
@@ -187,7 +187,7 @@ export function applyRoadConfinement(confinement, pos, delta, lastGood = null) {
       const d = Math.hypot(dx, dz) || 1;
       return {
         pushX: (dx / d) * SOFT_PUSH, pushZ: (dz / d) * SOFT_PUSH,
-        hard: false, offRoad: true, drag: SOFT_DRAG, strayed: true,
+        hard: false, offRoad: true, drag: -SOFT_DRAG, strayed: true,
       };
     }
     return { pushX: 0, pushZ: 0, hard: true, offRoad: true, strayed: true };
@@ -199,17 +199,17 @@ export function applyRoadConfinement(confinement, pos, delta, lastGood = null) {
     // nasa loob pa (o kaunti lang ang labas) - walang action
     return { pushX: 0, pushZ: 0, hard: false, offRoad: false };
   }
-  // push pabalik sa kalsada (negative = papunta sa centerline)
-  const push = -Math.min(1, (over - KERB_SOFT) / (KERB_HARD - KERB_SOFT));
-  let px = -near.nx * push * SOFT_PUSH;
-  let pz = -near.nz * push * SOFT_PUSH;
+  // Positive magnitude; negate the outward normal para pabalik sa kalsada.
+  const push = Math.min(1, (over - KERB_SOFT) / (KERB_HARD - KERB_SOFT));
+  const px = -near.nx * push * SOFT_PUSH;
+  const pz = -near.nz * push * SOFT_PUSH;
   const hard = over >= KERB_HARD;
   if (hard) {
     // clamp papunta sa gilid ng kalsada (sa loob ng corridor)
     pos.x = near.px - near.nx * 0.1;
     pos.z = near.pz - near.nz * 0.1;
   }
-  return { pushX: px, pushZ: pz, hard, offRoad: true, drag: SOFT_DRAG * push };
+  return { pushX: px, pushZ: pz, hard, offRoad: true, drag: -SOFT_DRAG * push };
 }
 
 /** Clamp sa square boundary ng mapa. Zero ang velocity component na tinamaan. */

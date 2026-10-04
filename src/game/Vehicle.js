@@ -1,7 +1,8 @@
 ﻿import * as THREE from 'three';
-import { terrainHeight } from '../utils/geo.js';
+import { terrainHeight, gpsToLocal } from '../utils/geo.js';
+import { SPAWN_GPS } from '../world/landmarkData.js';
 import { applyRoadConfinement, clampToMap } from '../utils/boundary.js';
-import { ROAD_LINES, pickSpawnRoad } from '../utils/roadLayout.js';
+import { ROAD_LINES, pickSpawnRoad, nearestDistanceOnRoad, sampleRoad } from '../utils/roadLayout.js';
 
 // Vehicle Physics Constants
 const MAX_SPEED = 60;
@@ -94,19 +95,10 @@ export function spawnRoadInfo() {
     _spawnInfo = { x: 0, z: 0, heading: Math.PI / 2 };
     return _spawnInfo;
   }
-  // titik sa centerline: yung pinakamalapit sa origin, pero para hindi
-  // eksakto sa dulo, kumuha ng 30% ng haba mula sa simula.
-  let bi = 0, bd = Infinity;
-  for (let i = 0; i < best.pts.length; i++) {
-    const d = Math.hypot(best.pts[i].x, best.pts[i].z);
-    if (d < bd) { bd = d; bi = i; }
-  }
-  const a = best.pts[Math.max(0, bi - 1)];
-  const b = best.pts[Math.min(best.pts.length - 1, bi + 1)];
-  const tx = b.x - a.x, tz = b.z - a.z;
-  // heading = atan2(tx, tz) - ang "forward" ng kotse ay (sin, cos)
-  const heading = Math.atan2(tx, tz);
-  _spawnInfo = { x: best.pts[bi].x, z: best.pts[bi].z, heading };
+  const requested = gpsToLocal(...SPAWN_GPS);
+  const near = nearestDistanceOnRoad(best.i, requested.x, requested.z);
+  const point = sampleRoad(best.i, near.along, 0);
+  _spawnInfo = { x: point.x, z: point.z, heading: point.yaw, road: best.name, ri: best.i };
   return _spawnInfo;
 }
 
@@ -306,6 +298,7 @@ export class Vehicle {
 
 
   update(delta, input) {
+    this.impactStrength = 0;
     delta = Math.min(delta, 0.05);
     if (input.forward) this.speed += ACCELERATION * delta;
     if (input.backward) {
@@ -384,7 +377,7 @@ export class Vehicle {
     const moveZ = Math.cos(this.rotation) * this.speed * delta;
     const newPos = new THREE.Vector3(this.position.x + moveX, this.position.y, this.position.z + moveZ);
     if (!this.checkCollision(newPos)) { this.position.copy(newPos); }
-    else { this.speed *= -0.3; }
+    else { this.impactStrength = Math.abs(this.speed); this.speed *= -0.3; }
 
     // --- FIX 1: INVISIBLE BOUNDARY WALLS (physics lang, walang mesh) ---
     // 1a) ROAD CONFINEMENT: kapag lumabas ang kotse sa gilid ng kalsada
@@ -397,7 +390,8 @@ export class Vehicle {
         this.position.x += r.pushX * delta;
         this.position.z += r.pushZ * delta;
         // kerb drag: bumabagal habang naglalabas (exponential, frame-rate safe)
-        if (r.drag) this.speed *= Math.max(0, 1 - r.drag * delta);
+        // Signed damping rate is negative; never accelerate forward or reverse.
+        if (r.drag) this.speed *= Math.exp(Math.min(0, r.drag) * delta);
         if (r.hard) {
           // hard stop: zero ang velocity component na pababa sa gilid
           this.speed *= 0.35;

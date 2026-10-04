@@ -53,7 +53,7 @@ const outPath = args.out || ROOT + '.cache/marikina_roads.json';
 
 const query = `[out:json][timeout:180];
 way["highway"~"^(${HIGHWAYS})$"](${south},${west},${north},${east});
-out geom tags;`;
+out body geom;`;
 
 const spanKm = {
   ns: ((north - south) * 111.132).toFixed(2),

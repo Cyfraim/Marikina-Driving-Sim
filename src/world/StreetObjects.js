@@ -180,6 +180,8 @@ export class StreetObjects {
   build(bounds = null, target = this.group) {
     const furniture = new ColoredMeshBuilder(); // poste, ilaw, kanal, sign
     const npc = new ColoredMeshBuilder();       // tricycle, jeepney
+    const canals = new ColoredMeshBuilder();    // separate: canals never cast shadows
+    const poles = new ColoredMeshBuilder();
     let postCount = 0;
     let lightCount = 0;
     let canalRows = 0;
@@ -215,7 +217,7 @@ export class StreetObjects {
                 s.z < bounds.minZ || s.z > bounds.maxZ) continue;
           }
           if (!curbsideSpot(s.x, s.z, ri, 0.4)) continue;
-          this.post(furniture, s.x, s.z, rnd);
+          this.post(poles, s.x, s.z, rnd);
           posts[side].push({ d, x: s.x, z: s.z, nX: s.nX, nZ: s.nZ, y: terrainHeight(s.x, s.z) + 6.5 });
           this.collisionBoxes.push(
             new THREE.Box3().setFromCenterAndSize(
@@ -262,7 +264,7 @@ export class StreetObjects {
 
     // --- 2) Street lights (pangunahing kalsada, isang gilid) --------------
     ROAD_LINES.forEach((road, ri) => {
-      if (!MAJOR.has(road.cls)) return;
+      if (!MAJOR.has(road.cls) || road.profile.parkingWidth === 0) return;
       if (bounds) {
         if (road.maxX < bounds.minX || road.minX > bounds.maxX ||
             road.maxZ < bounds.minZ || road.minZ > bounds.maxZ) return;
@@ -275,25 +277,25 @@ export class StreetObjects {
         if (bounds && (s.x < bounds.minX || s.x > bounds.maxX ||
                        s.z < bounds.minZ || s.z > bounds.maxZ)) continue;
         if (!curbsideSpot(s.x, s.z, ri, 0.4)) continue;
-        this.streetLight(furniture, s, side);
+        this.streetLight(poles, s, side);
         lightCount++;
       }
     });
 
     // --- 3) Open drainage canals sa gilid ng pangunahing kalsada ---------
     ROAD_LINES.forEach((road, ri) => {
-      if (!MAJOR.has(road.cls) || road.len < 20) return;
+      if (!road.profile.drainageWidth || road.len < 20) return;
       if (bounds) {
         if (road.maxX < bounds.minX || road.minX > bounds.maxX ||
             road.maxZ < bounds.minZ || road.minZ > bounds.maxZ) return;
       }
       // primary/secondary: dalawang gilid; tertiary: isang gilid lang
       const sides = road.cls === 'tertiary' ? [1] : [1, -1];
-      const sw = road.hasSW ? sidewalkWidth(road.cls) : 0;
+      const sw = road.swWidth;
       for (const side of sides) {
         const rows = [];
         for (let d = 6; d < road.len - 6; d += 4) {
-          const off = road.half + sw + 0.45; // gitna ng canal (0.9 m lapad)
+          const off = road.half + road.profile.shoulderWidth + sw + road.profile.drainageWidth / 2;
           const s = sampleRoad(ri, d, side * off);
           // FIX 2: sa tile mode, ang labas sa box ay naghahati ng run - kaya
           // natatapos ang canal sa tile border at magpapatuloy sa next tile.
@@ -303,7 +305,7 @@ export class StreetObjects {
         }
         let run = [];
         const flush = () => {
-          if (run.length >= 2) { this.canalSegment(furniture, run, side); canalRows += run.length; }
+          if (run.length >= 2) { this.canalSegment(canals, run, side); canalRows += run.length; }
           run = [];
         };
         for (const r of rows) { if (r) run.push(r); else flush(); }
@@ -355,6 +357,7 @@ export class StreetObjects {
       if (terminals >= 18) break;
       if (rnd() < 0.15) continue;
       const road = ROAD_LINES[j.a];
+      if (road.profile.parkingWidth === 0) continue;
       const base = nearestDistanceOnRoad(j.a, j.x, j.z).along;
       const cluster = 3 + (rnd() < 0.45 ? 1 : 0);
       const dir = rnd() < 0.5 ? 1 : -1; // direksyon ng pila
@@ -407,7 +410,7 @@ export class StreetObjects {
       // kotse ay naka-spawn sa "pinakamahabang arteryal sa buong mapa" -
       // dalawang magkaibang kalsada, kaya walang tricycle na nakikita.
       const spawnLine = pickSpawnRoad();
-      if (spawnLine) {
+      if (spawnLine && spawnLine.profile.parkingWidth > 0) {
         const ri = ROAD_LINES.indexOf(spawnLine);
         const road = spawnLine;
         // Ang base ay ang projection ng CENTER ng mapa (0,0) sa kalsadang ito -
@@ -488,11 +491,21 @@ export class StreetObjects {
     const furnitureMat = new THREE.MeshStandardMaterial({
       vertexColors: true, roughness: 0.8, metalness: 0.1,
     });
-    target.add(furniture.build(furnitureMat));
+    const furnitureMesh = furniture.build(furnitureMat);
+    furnitureMesh.castShadow = false;
+    target.add(furnitureMesh);
+    const canalMesh = canals.build(furnitureMat);
+    canalMesh.castShadow = false;
+    target.add(canalMesh);
+    const poleMesh = poles.build(furnitureMat);
+    poleMesh.castShadow = true;
+    target.add(poleMesh);
     const npcMat = new THREE.MeshStandardMaterial({
       vertexColors: true, roughness: 0.5, metalness: 0.3,
     });
-    target.add(npc.build(npcMat));
+    const npcMesh = npc.build(npcMat);
+    npcMesh.castShadow = true;
+    target.add(npcMesh);
 
     const wireGeo = new THREE.BufferGeometry();
     wireGeo.setAttribute('position', new THREE.Float32BufferAttribute(this.wireVerts, 3));
@@ -549,8 +562,8 @@ export class StreetObjects {
   }
 
   // Open drainage canal: madilim na ilalim + dalawang pader ng semento
-  canalSegment(mesh, rows, side) {
-    const W = 0.45; // kalahating lapad (gitna -> gilid)
+  canalSegment(mesh, rows, side, width = 0.6) {
+    const W = width / 2; // canonical drainage width
     const TOP = 0.35;
     const BOT = 0.02;
     const LIP = 0.16;

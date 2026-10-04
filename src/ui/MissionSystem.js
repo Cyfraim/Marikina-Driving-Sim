@@ -19,9 +19,12 @@
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
 import { gpsToLocal, terrainHeight } from '../utils/geo.js';
-import { ROAD_LINES, distToPolyline, nearestDistanceOnRoad } from '../utils/roadLayout.js';
+import { ROAD_LINES, distToPolyline, nearestDistanceOnRoad, sampleRoad } from '../utils/roadLayout.js';
 import { getRoadGraph, RoadGraph, turnAngleAt, roadNameAt } from '../utils/RoadGraph.js';
 import { WP_COLORS } from './Minimap.js';
+import { LANDMARKS } from '../world/landmarkData.js';
+import { riverDistance } from '../utils/riverGeometry.js';
+const landmarkGps = id => LANDMARKS.find(p => p.id === id).gps;
 
 const REACH_M = 15;          // kailan "naihatid" ang parcelo / napuntahan
 const BEACON_H = 8;          // taas ng beacon (spec)
@@ -69,12 +72,12 @@ function arrowGlyph(ang) {
 // coordinate - ang KALIDAD ng kalsada sa bandang iyon ang mas mahalaga.
 export const WAYPOINTS = {
   m1Start:   [14.6512, 121.1086], // Bayan-Bayanan Ave / H. Bautista St (Nangka)
-  m1End:     [14.6508, 121.1070], // J. P. Rizal St / Bayan-Bayanan Ave (Bayan)
-  m2End:     [14.6489, 121.1028], // Marikina Sports Center (mula sa brief)
-  cathedral: [14.6533, 121.1051], // Marikina Cathedral
+  m1End:     landmarkGps('market'), // Bayan market arrival
+  m2End:     landmarkGps('sports'), // checked sports complex
+  cathedral: landmarkGps('parish'), // legacy key; Immaculate Conception Parish
   smCity:    [14.6442, 121.1060], // SM City Marikina
   pritil:    [14.6479, 121.1131], // Pritil Bridge
-  market:    [14.6530, 121.1103], // Marikina Public Market (Bayan)
+  market:    landmarkGps('market'),
   nangka:    [14.6508, 121.1080], // Nangka - pagsisimula (para sa loop)
   // --- PHASE 3: mga bagong waypoint (M4/M5/M6) ---
   school:   [14.6520, 121.1065], // Marikina Science High School (M5 target)
@@ -306,10 +309,23 @@ export class MissionSystem {
   // =========================================================================
 
   clearMarkers() {
+    const geometries = new Set(), materials = new Set();
     for (const b of this.beacons) {
-      if (b.mesh && b.mesh.parent) b.mesh.parent.remove(b.mesh);
-      if (b.mesh && b.mesh.geometry) b.mesh.geometry.dispose();
+      for (const key of ['mesh', 'cap', 'inner']) {
+        const root = b[key];
+        if (!root) continue;
+        root.removeFromParent();
+        root.traverse(o => {
+          if (o.geometry) geometries.add(o.geometry);
+          for (const material of Array.isArray(o.material) ? o.material : [o.material]) {
+            if (material) materials.add(material);
+          }
+        });
+        b[key] = null;
+      }
     }
+    for (const geometry of geometries) geometry.dispose();
+    for (const material of materials) material.dispose();
     this.beacons.length = 0;
   }
 
@@ -667,12 +683,17 @@ export class MissionSystem {
     this.floodGroup = new THREE.Group();
     this.floodGroup.name = 'flood';
     scene.add(this.floodGroup);
-    // malapit sa ilog (RIVER_X = 860 sa utils/geo.js), bahagyang kaliit pa
-    const spots = [
-      { x: 700, z: 200, len: 60, ang: 0 },
-      { x: 760, z: -150, len: 60, ang: 0.4 },
-      { x: 640, z: 480, len: 60, ang: -0.3 },
-    ];
+    // Fictional flood gameplay zones, now anchored to roads near the real river.
+    const spots = [];
+    for (const r of ROAD_LINES) {
+      if (r.cls === 'service' || r.cls === 'track' || r.len < 60) continue;
+      const near = nearestDistanceOnRoad(r.i, (r.minX + r.maxX) / 2, (r.minZ + r.maxZ) / 2);
+      const p = sampleRoad(r.i, near.along, 0);
+      const bank = riverDistance(p.x, p.z).bankDistance;
+      if (bank < 45 || bank > 160 || spots.some(s => Math.hypot(s.x - p.x, s.z - p.z) < 200)) continue;
+      spots.push({ x: p.x, z: p.z, len: 60, ang: Math.PI / 2 - p.yaw });
+      if (spots.length === 3) break;
+    }
     this.floodSegs = [];
     for (const sp of spots) {
       const g = new THREE.Group();

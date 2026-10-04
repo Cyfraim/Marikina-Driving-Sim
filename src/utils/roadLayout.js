@@ -14,6 +14,15 @@
 // ---------------------------------------------------------------------------
 import { ROADS } from '../world/roadData.js';
 import { gpsToLocal } from './geo.js';
+import { getRoadProfile, defaultSidewalkWidth, canPark } from './RoadProfile.js';
+import { SPAWN_GPS, LANDMARKS } from '../world/landmarkData.js';
+import { isRiver } from './riverGeometry.js';
+
+const landmarkReservations = LANDMARKS.map(l => ({ ...gpsToLocal(...l.gps),
+  radius: Math.hypot(l.width / 2 + l.grounds, l.depth / 2 + l.grounds) }));
+export function reservedGeography(x, z, radius = 0) {
+  return isRiver(x, z, radius) || landmarkReservations.some(l => Math.hypot(x - l.x, z - l.z) < radius + l.radius);
+}
 
 // Lapad ng bangketa (sidewalk). Perisyoso: ang drivable limit ng kotse ay
 // half-width + SW_WIDTH (tingnan RoadConfinement sa utils/boundary.js).
@@ -23,30 +32,15 @@ import { gpsToLocal } from './geo.js';
 // Nangka: 1.5-2 m sa residential/barangay, 2.5-3 m sa main roads.
 // SW_WIDTH = ang UPPER BOUND (2.8 m) para sa mga code path na kailangan
 // ng worst case (confinement limit, corridor checks).
-export const SW_WIDTH = 2.8;
+export const SW_WIDTH = 2.5;
 
 /** Lapad ng bangketa para sa isang kalsada ayon sa OSM class. */
 export function sidewalkWidth(cls) {
-  if (cls === 'primary' || cls === 'secondary') return 2.8; // main road
-  if (cls === 'tertiary') return 2.2;                         // collector
-  return 1.8;                                                 // residential / alley
+  return defaultSidewalkWidth(cls);
 }
 
-// --- Minimum drivable width (Fix invisible-wall) ---------------------------
-// Ang kalsada ay kailangang HINDI LAGYAN ng poste + tricycle sa magkabilang
-// gilid na magkasalubong. Pinagsasama:
-//   - kotse: 2.0 m wide
-//   - 2 x poste (0.5 m) sa magkabilang gilid
-//   - 2 x jeepney (2.4 m) sa magkabilang gilid
-//   - 2 x 0.3 m margin
-//   = 2.0 + 1.0 + 4.8 + 0.6 = 8.4 m
-// Kaya ang MIN_DRIVABLE_HALF ay 4.2 m (8.4 m kalsada) para may 2.4 m na
-// tunay na lane kahit sa makitid na barangay street.
-// NOTE: ito ay mas malaki sa OSM width para sa ilang kalsada, pero ang
-// kalsada sa lalim ng Nangka ay karaniwang 6-8 m, at ang 5.5 m ay hindi
-// sapat para sa kotse + naka-park na sasakyan.
-export const MIN_DRIVABLE_HALF = 4.2;
-const MIN_ROAD_WIDTH = MIN_DRIVABLE_HALF * 2; // 8.4 m
+// Narrow roads retain actual width; restrict parking/traffic instead of widening.
+export const MIN_DRIVABLE_HALF = 0; // compatibility: no minimum-width padding
 
 // Minimum clearance ng naka-park na NPC (tricycle/jeepney) mula sa centerline
 // ng kahit anong kalsada, bago pa idagdag ang half-width ng sasakyan.
@@ -54,8 +48,9 @@ const MIN_NPC_LANE = 2.4;
 
 // Pre-convert lahat ng polylines (isang beses lang sa boot)
 export const ROAD_LINES = ROADS.map((r, i) => {
-  let pts = r.pts.map(([lat, lon]) => gpsToLocal(lat, lon));
-  pts = pts.filter((p, j) => j === 0 || Math.hypot(p.x - pts[j - 1].x, p.z - pts[j - 1].z) > 0.05);
+  const local = r.pts.map(([lat, lon]) => gpsToLocal(lat, lon));
+  const kept = local.map((p, j) => j).filter(j => j === 0 || Math.hypot(local[j].x - local[j - 1].x, local[j].z - local[j - 1].z) > 0.05);
+  const pts = kept.map(j => local[j]);
   if (pts.length < 2) return null;
   const cum = [0];
   for (let k = 1; k < pts.length; k++) {
@@ -68,16 +63,19 @@ export const ROAD_LINES = ROADS.map((r, i) => {
     if (p.z < minZ) minZ = p.z;
     if (p.z > maxZ) maxZ = p.z;
   }
-  // Lapad: OSM width, nang hindi bababa sa minimum drivable width
-  const w = Math.max(r.w, MIN_ROAD_WIDTH);
+  // Actual carriageway width from the shared profile; walang artificial padding.
+  const profile = getRoadProfile(r);
+  const w = profile.carriageWidth;
   return {
-    i, name: r.name, cls: r.cls, sw: r.sw, mk: r.mk,
+    i, name: r.name, cls: r.cls, sw: r.sw, mk: r.mk, profile,
+    nodeIds: r.nodeIds ? kept.map(j => r.nodeIds[j]) : undefined, osmWayId: r.osmWayId, layer: r.layer,
+    bridge: r.bridge, tunnel: r.tunnel, isOneWay: profile.isOneWay,
     half: w / 2, pts, cum, len: cum[cum.length - 1],
     minX, maxX, minZ, maxZ,
     hasSW: r.sw !== 'none',
     // lapad ng bangketa para sa confinement ng kotse (0 kung walang bangketa)
     // Fix 5: per-class, hindi isang constant na 3.0 m
-    swWidth: r.sw !== 'none' ? sidewalkWidth(r.cls) : 0,
+    swWidth: Math.max(profile.leftSidewalkWidth, profile.rightSidewalkWidth),
   };
 }).filter(Boolean);
 
@@ -176,6 +174,11 @@ export function safeSpot(x, z, halfSize, ownRi = -1) {
  */
 const MIN_LANE_CLEAR = 2.4; // kotse 2.0 + 0.4 margin
 
+/** Convert left normal (-dz, dx) to vehicle heading: forward=(sin h, cos h). */
+export function headingFromRoadNormal(normal) {
+  return Math.atan2(normal.z, -normal.x);
+}
+
 /**
  * @param {number} x,z    center ng building
  * @param {number} hx,hz  half-extents (local X = width, local Z = depth)
@@ -248,6 +251,7 @@ function nearestNormal(x, z, pts) {
  * - bawal sa loob ng corridor+sidewalk ng IBA ring kalsada
  */
 export function curbsideSpot(x, z, ownRi, pad = 0.5) {
+  if (isRiver(x, z, pad)) return false;
   const list = candidateRoads(x, z);
   if (!list) return true;
   for (let n = 0; n < list.length; n++) {
@@ -255,8 +259,8 @@ export function curbsideSpot(x, z, ownRi, pad = 0.5) {
     if (outsideBBox(line, x, z, line.half + line.swWidth + pad + 1)) continue;
     const d = distToPolyline(x, z, line.pts);
     if (line.i === ownRi) {
-      if (d < line.half + 0.2) return false; // nasa asphalt
-    } else if (d < line.half + line.swWidth + pad) {
+      if (d < line.half + 1.6) return false; // car overhang + furniture clearance
+    } else if (d < line.half + Math.max(line.swWidth + pad, 1.6)) {
       return false; // junction / ibang kalsada
     }
   }
@@ -295,6 +299,8 @@ export function npcClearOfLanes(x, z, halfWidth) {
 
 /** Para sa naka-paradang NPC: nasa OWN asphalt, hindi sa junction, malapit sa spawn. */
 export function npcSpot(x, z, ownRi) {
+  if (isRiver(x, z, 2)) return false;
+  if (!canPark(ROAD_LINES[ownRi])) return false;
   // FIX 4c: dating 45 m ang clearance - hinala pa ang mga tricycle sa malayo.
   // Ginawa na 20 m para may cluster na VISIBLE mula sa spawn, pero hindi
   // nakatakbo sa mismong lugar ng kotse.
@@ -423,15 +429,14 @@ export function nearestDistanceOnRoad(ri, x, z) {
 export const SPAWN_SEARCH = 700; // metros mula sa center ng mapa
 
 export function pickSpawnRoad() {
-  let best = null;
-  let bestFallback = null;
+  const spawn = gpsToLocal(...SPAWN_GPS);
+  let best = null, bestDistance = Infinity;
   for (const line of ROAD_LINES) {
-    if (line.cls !== 'primary' && line.cls !== 'secondary') continue;
-    if (!bestFallback || line.len > bestFallback.len) bestFallback = line;
-    if (distToPolyline(0, 0, line.pts) > SPAWN_SEARCH) continue;
-    if (!best || line.len > best.len) best = line;
+    if (line.name !== 'Bayan-Bayanan Avenue') continue;
+    const distance = distToPolyline(spawn.x, spawn.z, line.pts);
+    if (distance < bestDistance) { best = line; bestDistance = distance; }
   }
-  return best || bestFallback || null;
+  return best;
 }
 
 // --- Deterministic RNG (parehong output bawat run = madaling i-validate) -----

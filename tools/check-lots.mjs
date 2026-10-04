@@ -12,7 +12,7 @@ import { Map as GameMap } from '../src/world/Map.js';
 import { spawnRoadInfo } from '../src/game/Vehicle.js';
 import { Buildings } from '../src/world/Buildings.js';
 import { ROAD_LINES, distToPolyline, sampleRoad } from '../src/utils/roadLayout.js';
-import { SW_WIDTH } from '../src/utils/roadLayout.js';
+import { SW_WIDTH, sidewalkWidth, nearestDistanceOnRoad } from '../src/utils/roadLayout.js';
 
 let fail = 0;
 const check = (name, cond, detail = '') => {
@@ -41,7 +41,10 @@ const setbacks = majorFp.map((f) => {
   const r = ROAD_LINES[f.ri];
   const d = distToPolyline(f.x, f.z, r.pts);
   // curb -> labas ng bangketa -> harap ng building
-  return d - r.half - (r.hasSW ? SW_WIDTH : 0) - f.hz;
+  const s = sampleRoad(f.ri, nearestDistanceOnRoad(f.ri, f.x, f.z).along, 0);
+  const side = (f.x - s.x) * s.nX + (f.z - s.z) * s.nZ;
+  const sw = side > 0 ? r.profile.leftSidewalkWidth : r.profile.rightSidewalkWidth;
+  return d - r.half - r.profile.shoulderWidth - sw - r.profile.drainageWidth - f.hz;
 });
 setbacks.sort((p, q) => p - q);
 const sMin = setbacks[0], sMed = setbacks[(setbacks.length / 2) | 0], sMax = setbacks[setbacks.length - 1];
@@ -194,8 +197,9 @@ check('lot fill 0x9e8c6e present as a mesh', hexes.includes('#9e8c6e'), hexes.jo
 check('sidewalk 0xcccccc present as a mesh', hexes.includes('#cccccc'), hexes.join(','));
 check('grass ground 0x4a7c3f still present for open areas',
   hexes.includes('#4a7c3f') || true, 'ground plane kept (visible outside lot fill)');
-check('sidewalk is per-class (1.8 residential .. 2.8 main road)',
-  SW_WIDTH === 2.8, `SW_WIDTH = ${SW_WIDTH} m (upper bound)`);
+check('sidewalk uses canonical defaults (1.5 residential, 2.5 primary, 0 alley)',
+  SW_WIDTH === 2.5 && sidewalkWidth('residential') === 1.5 && sidewalkWidth('primary') === 2.5 && sidewalkWidth('service') === 0,
+  `SW_WIDTH = ${SW_WIDTH} m (default upper bound)`);
 check('lot fill extends to >= 15 m from centerline', true, 'Roads.js addLotFill: dOut = max(dIn+6, 15)');
 
 console.log('\n' + '='.repeat(72));

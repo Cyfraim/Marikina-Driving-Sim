@@ -47,7 +47,7 @@ export class Game {
       this.scene = new THREE.Scene();
       this.scene.background = new THREE.Color(0x87ceeb);
       // Fog: nagtatago sa mga border ng malaking road network (1.5 km+)
-      this.scene.fog = new THREE.Fog(0x87ceeb, 200, 1100);
+      this.scene.fog = new THREE.Fog(0xc8d8e8, 150, 950);
 
       // Create camera (far plane: sakop ang buong Nangka map)
       const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 3000);
@@ -125,6 +125,26 @@ export class Game {
       this.speedSigns = new SpeedSignSystem(this.scene);
       // PHASE 2C/2D: audio (horn + rain) at weather
       this.audio = new AudioFX();
+      this.audioFocusLost = false;
+      this.audioBlurListener = () => { this.audioFocusLost = true; this.audio.setActive(false); };
+      this.audioFocusListener = () => {
+        this.audioFocusLost = false;
+        this.audio.setActive(!this.isPaused && !document.hidden);
+      };
+      this.audioVisibilityListener = () => {
+        if (document.hidden) this.audioBlurListener();
+        else this.audioFocusListener();
+      };
+      window.addEventListener('blur', this.audioBlurListener);
+      window.addEventListener('focus', this.audioFocusListener);
+      document.addEventListener('visibilitychange', this.audioVisibilityListener);
+      this.audioUnloadListener = () => {
+        window.removeEventListener('blur', this.audioBlurListener);
+        window.removeEventListener('focus', this.audioFocusListener);
+        document.removeEventListener('visibilitychange', this.audioVisibilityListener);
+        this.audio.destroy();
+      };
+      window.addEventListener('beforeunload', this.audioUnloadListener, { once: true });
       this.weather = new Weather(this.scene);
       // NOTE: ang fog/original sky ay kailangan para sa weather toggle
       this.baseFogNear = this.scene.fog.near;
@@ -166,21 +186,25 @@ export class Game {
 
   setupLighting() {
     // Ambient light
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambient = new THREE.AmbientLight(0xfff5e0, 0.6);
+    this.ambient = ambient;
     this.scene.add(ambient);
 
     // Directional light (sun)
-    const sun = new THREE.DirectionalLight(0xffffff, 1.0);
-    sun.position.set(50, 80, 50);
+    const sun = new THREE.DirectionalLight(0xffe8b0, 1.0);
+    sun.position.set(100, 60, 50);
     sun.castShadow = true;
     sun.shadow.mapSize.width = 2048;
     sun.shadow.mapSize.height = 2048;
     sun.shadow.camera.near = 0.5;
     sun.shadow.camera.far = 300;
-    sun.shadow.camera.left = -100;
-    sun.shadow.camera.right = 100;
-    sun.shadow.camera.top = 100;
-    sun.shadow.camera.bottom = -100;
+    sun.shadow.camera.left = -75;
+    sun.shadow.camera.right = 75;
+    sun.shadow.camera.top = 75;
+    sun.shadow.camera.bottom = -75;
+    sun.shadow.bias = -0.0002;
+    sun.shadow.normalBias = 0.1;
+    this.scene.add(sun.target);
     this.scene.add(sun);
     this.sun = sun;
 
@@ -202,11 +226,7 @@ export class Game {
     if (!this.weather) return null;
     const w = this.weather.cycle();
     // sky + fog color
-    this.scene.background = new THREE.Color(w.sky);
-    this.scene.fog.color = new THREE.Color(w.sky);
-    // fog distance: heavy rain reduces visibility by 40% (spec)
-    this.scene.fog.near = this.baseFogNear * w.fogScale;
-    this.scene.fog.far = this.baseFogFar * w.fogScale;
+    this.applyAtmosphere();
     // rain sound
     if (this.audio) this.audio.setRainGain(w.rainGain);
     // NPC speed: heavy rain -> 70% (spec)
@@ -227,6 +247,7 @@ export class Game {
     // 0x111111 (dry) -> 0x444444/0x666666 (wet). Isang linear na fade.
     const wet = (spec - 0x111111) / (0x666666 - 0x111111);
     const rough = 0.95 - wet * 0.55;   // 0.95 dry -> 0.40 wet
+    if (this.map?.roads) this.map.roads.surfaceRoughness = rough;
     this.scene.traverse((o) => {
       if (!o.isMesh) return;
       const m = o.material;
@@ -238,18 +259,47 @@ export class Game {
     });
   }
 
+  setTraffic(value) {
+    this.settings.traffic = value === 'off' ? 'off' : 'on';
+    if (this.npcManager) this.npcManager.setEnabled(this.settings.traffic === 'on');
+    if (this.settings.traffic === 'off' && this.vehicle) this.vehicle.setNpcColliders([]);
+  }
+
   setTimeOfDay(time) {
+    this.settings.timeOfDay = time === 'night' ? 'night' : 'day';
+    this.applyAtmosphere();
+  }
+
+  applyAtmosphere() {
+    const time = this.settings.timeOfDay;
+    const weather = this.weather?.info;
+    const fogScale = weather?.fogScale ?? 1;
     if (time === 'night') {
       this.scene.background = new THREE.Color(0x0a0a2a);
       this.scene.fog = new THREE.Fog(0x0a0a2a, 50, 300);
       this.sun.intensity = 0.2;
       this.hemi.intensity = 0.1;
+      this.ambient.intensity = 0.15;
     } else {
-      this.scene.background = new THREE.Color(0x87ceeb);
-      this.scene.fog = new THREE.Fog(0x87ceeb, 100, 500);
+      this.scene.background = new THREE.Color(weather?.sky ?? 0x87ceeb);
+      this.scene.fog = new THREE.Fog(this.weather?.isRaining ? weather.sky : 0xc8d8e8, 150, 950);
       this.sun.intensity = 1.0;
       this.hemi.intensity = 0.4;
+      this.ambient.intensity = 0.6;
     }
+    this.scene.fog.near *= fogScale;
+    this.scene.fog.far *= fogScale;
+  }
+
+  updateShadows() {
+    if (!this.sun || !this.vehicle) return;
+    const p = this.vehicle.position;
+    // Move light AND target together to preserve afternoon direction.
+    this.sun.target.position.copy(p);
+    this.sun.position.set(p.x + 100, p.y + 60, p.z + 50);
+    this.sun.target.updateMatrixWorld();
+    this.sun.updateMatrixWorld();
+    this.sun.shadow.camera.updateProjectionMatrix();
   }
 
   /**
@@ -317,6 +367,8 @@ export class Game {
    */
   startGame(withMissions = true) {
     this.isPaused = false;
+    this.audio?.setActive(true);
+    this.audio?.resume();
     this.hud.show();
     this.menu.hideAll();
     // Reset vehicle to starting position
@@ -348,13 +400,14 @@ export class Game {
   }
 
   animate() {
-    requestAnimationFrame(() => this.animate());
     try {
       const delta = this.clock.getDelta();
 
       if (!this.isPaused) {
         // Update vehicle physics
         this.vehicle.update(delta, this.input);
+        this.audio?.update(this.vehicle, this.input);
+        if (this.vehicle.impactStrength) this.audio?.impact(this.vehicle.impactStrength);
 
         // FIX 2: TILE STREAMING. I-load/unload/cull ang mga 400 m tile
         // ayon sa posisyon, at ire-refresh ang collider ng kotse kapag may
@@ -368,10 +421,12 @@ export class Game {
         // AABB colliders sa kotse. `weatherSpeedScale` ay 1.0 malinis at 0.7
         // sa malakas na ulan (Phase 2D).
         if (this.npcManager) {
-          this.vehicle.setNpcColliders(
-            this.npcManager.update(delta, this.vehicle.position,
+          const trafficOn = this.settings.traffic === 'on';
+          this.npcManager.setEnabled(trafficOn);
+          this.vehicle.setNpcColliders(trafficOn
+            ? this.npcManager.update(delta, this.vehicle.position,
               this.weatherSpeedScale, this.trafficLights)
-          );
+            : []);
         }
         // PHASE 1 (1C): mga pedestrian - culled sa 200 m
         if (this.pedestrianManager) {
@@ -393,9 +448,14 @@ export class Game {
         this.minimap.update();
       }
 
+      this.audio?.setActive(!this.isPaused && !this.audioFocusLost && !document.hidden);
+      this.updateShadows();
       this.renderer.render(this.scene, this.cameraController.camera);
+      // Schedule only after a successful frame: errors stop the loop.
+      requestAnimationFrame(() => this.animate());
     } catch (error) {
       console.error('Animation error:', error);
+      this.audio?.setActive(false);
       // Stop the animation loop to prevent error spam
       this.showError(error);
     }
@@ -410,6 +470,8 @@ export class Game {
 
   togglePause() {
     this.isPaused = !this.isPaused;
+    this.audio?.setActive(!this.isPaused && !this.audioFocusLost);
+    if (!this.isPaused) this.audio?.resume();
     if (this.isPaused) {
       this.menu.showMainMenu();
       this.hud.hide();

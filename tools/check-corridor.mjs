@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 import * as THREE from 'three';
 import { Map as GameMap } from '../src/world/Map.js';
-import { ROAD_LINES, densifyROAD } from '../src/utils/roadLayout.js';
+import { ROAD_LINES, densifyROAD, headingFromRoadNormal } from '../src/utils/roadLayout.js';
 
 let fail = 0;
 const CAR_W = 2.0, CAR_L = 4.2, CAR_H = 1.5;
@@ -174,7 +174,8 @@ for (const road of ROAD_LINES) {
     const p = line[i], n = nrm[i];
     // heading ng kotse = direksyon ng kalsada ("kaya bang mag-drive dito
     // nang naka-align sa kalsada?")
-    const heading = Math.atan2(n.x, n.z);
+    // Normal = (-tangent.z, tangent.x); vehicle forward is (sin h, cos h).
+    const heading = headingFromRoadNormal(n);
     const limit = road.half + 0.5;
     const N = Math.ceil((limit * 2) / 0.25);
     const free = new Array(N + 1).fill(true);

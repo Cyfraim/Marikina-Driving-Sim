@@ -4,17 +4,14 @@ import { Buildings } from './Buildings.js';
 import { Vegetation } from './Vegetation.js';
 import { StreetObjects } from './StreetObjects.js';
 import { Landmarks } from './Landmarks.js';
+import { River } from './River.js';
 import { TileManager } from './tiles.js';
 import { terrainHeight } from '../utils/geo.js';
 import { RoadConfinement, MAP_BOUND } from '../utils/boundary.js';
 import { MAP_EXTENT } from '../utils/geo.js';
+import { spawnRoadInfo } from '../game/Vehicle.js';
 
-// Ang scene origin (0,0) ay ang center ng bounding box ng Marikina at mga
-// 300 m ng Bayan-Bayanan - kaya siya ang pinakamagandang panimula para sa
-// pre-load ng tile.
-const MAP_ORIGIN_X = 0;
-const MAP_ORIGIN_Z = 0;
-void MAP_EXTENT;
+// Preload follows the road-snapped spawn, not the geographic projection origin.
 
 export class Map {
   constructor(scene) {
@@ -25,6 +22,7 @@ export class Map {
     this.vegetation = new Vegetation(scene);
     this.streetObjects = new StreetObjects(scene);
     this.landmarks = new Landmarks(scene);
+    this.river = new River();
     this.collisionBoxes = [];
     this.group = new THREE.Group();
     scene.add(this.group);
@@ -40,12 +38,13 @@ export class Map {
     // ang mga landmark ay nananatiling isang mesh (mahalaga at maliit).
     this.tiles = new TileManager(this.scene, {
       roads: this.roads,
+      river: this.river,
       buildings: this.buildings,
       vegetation: this.vegetation,
       streetObjects: this.streetObjects,
     });
 
-    // Landmarks: Marikina River, Nangka Public Market, tricycle terminal
+    // Checked landmark anchors; the river streams independently in road tiles.
     this.landmarks.build();
 
     // FIX 2: PRE-LOAD ang mga tile sa palibut ng pinagsisimulan ng player
@@ -55,7 +54,8 @@ export class Map {
     //     tumatawag ng build() tapos getCollisionBoxes() - kung hindi
     //     nalo-load ang tile, walang makikitang collider at magpapakita ang
     //     tool ng maling "0 boxes = malinis".
-    this.settleAt(MAP_ORIGIN_X, MAP_ORIGIN_Z);
+    const spawn = spawnRoadInfo();
+    this.settleAt(spawn.x, spawn.z);
 
     // FIX 1: invisible boundary system (collision/force lang, walang mesh)
     this.buildBoundaries();
@@ -141,7 +141,7 @@ export class Map {
    */
   getObbColliders() {
     if (!this.tiles) return this.obbColliders || [];
-    return this.tiles.collectObb();
+    return this.tiles.collectObb().concat(this.landmarks.obbColliders);
   }
 
   getCollisionBoxes() {
